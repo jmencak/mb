@@ -469,7 +469,7 @@ static int args_parse(struct config *cfg, int argc, char **argv) {
         if (p_err == optarg || *p_err) {
           die(EXIT_FAILURE, "ramp-up: `%s' not an integer\n", optarg);
         }
-        if (cfg->ramp_up <= 0 || optarg[0] == '-') die(EXIT_FAILURE, "ramp-up must be > 0\n", optarg);
+        if (cfg->ramp_up < 0 || optarg[0] == '-') die(EXIT_FAILURE, "ramp-up must be > 0\n", optarg);
         break;
 
       case 't':
