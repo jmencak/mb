@@ -30,9 +30,9 @@ static int connections = 0;		/* number of connections defined in input requests 
 static volatile sig_atomic_t stop = 0;	/* thread termination variable */
 
 struct http_parser_settings parser_settings = {
-  .on_message_complete	= response_complete,
+  .on_message_complete	= message_complete,
 #if 0
-  .on_message_begin	= response_begin,
+  .on_message_begin	= message_begin,
   .on_header_field	= header_field,
   .on_header_value	= header_value,
   .on_headers_complete	= headers_complete,
@@ -55,6 +55,7 @@ static inline char *mstrdup(const char *);
 uint64_t time_us();
 int stats_open(const char *);
 int stats_init();
+static char *format_bytes(char *dst, long double n);
 static void stats_print();
 int stats_close();
 void exit_handler();
@@ -126,22 +127,47 @@ int stats_init() {
   return stats_open(cfg.file_resp);
 }
 
+static char *format_bytes(char *dst, long double n) {
+  const char *suffix[] = { "B", "kiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB", NULL };
+  const char **suffix_ptr = suffix;
+  int base = 1024;
+
+  while(n > base) {
+    n /= base;
+    if (*suffix_ptr) suffix_ptr++;
+  }
+
+  snprintf(dst, 11, "%0.2Lf%s", n, *suffix_ptr);	/* 11: 4 + 1 ('.') + 2 (decimal places) + 3 + 1 ('\0') */
+
+  return dst;
+}
+
 /* Print statistics */
 void stats_print() {
+  char s1[12], s2[12];
   connection *cs_ptr = cs;
   uint64_t reqs = 0;
+  uint64_t sent_bytes = 0;
+  uint64_t recv_bytes = 0;
   uint64_t duration = time_us() - stats.start;
-  double rps;
+  long double rps, sent_mbps, recv_mbps;
   int n;
 
   for (n = 0; n < connections; n++, cs_ptr++) {
     reqs += cs_ptr->cstats.reqs_total;
+    sent_bytes += cs_ptr->cstats.written_total;
+    recv_bytes += cs_ptr->cstats.read_total;
   }
 
-  rps = (double)reqs*1000000/duration;
-  fprintf(stdout, "Duration [s]: %0.2lf\n", (double)duration/1000000);
-  fprintf(stdout, "Total hits: %"PRIu64"\n", reqs);
-  fprintf(stdout, "Req/s: %0.2lf\n", rps);
+  rps = (long double)reqs*1000000/duration;
+  recv_mbps = (long double)recv_bytes/duration*1000000;
+  sent_mbps = (long double)sent_bytes/duration*1000000;
+  fprintf(stdout, "Time: %0.2Lfs\n", (long double)duration/1000000);
+  format_bytes(s1, sent_bytes); format_bytes(s2, sent_mbps);
+  fprintf(stdout, "Sent: %s, %s/s\n", s1, s2);
+  format_bytes(s1, recv_bytes); format_bytes(s2, recv_mbps);
+  fprintf(stdout, "Recv: %s, %s/s\n", s1, s2);
+  fprintf(stdout, "Hits: %"PRIu64", %0.2Lf/s\n", reqs, rps);
   if (stats.err_conn || stats.err_status || stats.err_parser)
     fprintf(stdout, "Errors connection: %"PRIu64", status: %"PRIu64", parser: %"PRIu64"\n", stats.err_conn, stats.err_status, stats.err_parser);
 }
@@ -485,7 +511,7 @@ static int args_parse(struct config *cfg, int argc, char **argv) {
         break;
 
       case 'v':
-        printf(PGNAME" %s [%s] ", MB_VERSION, aeGetApiName());
+        printf(PGNAME" %s [%s]\n", MB_VERSION, aeGetApiName());
         exit(EXIT_SUCCESS);
         break;
 

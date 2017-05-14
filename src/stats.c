@@ -26,11 +26,12 @@ int write_stats_line(FILE *fd, connection *c, char *err) {
     delay = now - c->cstats.established;
   }
 
-  int len = snprintf(s, BUFSIZ, "%"PRIu64",%"PRIu64",%d,%"PRIu64",%s %s://%s:%d%s,%"PRIu64",%d,%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%s\n",
+  int len = snprintf(s, BUFSIZ, "%"PRIu64",%"PRIu64",%d,%"PRIu64",%"PRIu64",%s %s://%s:%d%s,%"PRIu64",%d,%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%s\n",
     start_request,
     delay,
     c->status,				/* HTTP response status */
-    c->bytes_in,			/* length of response body (headers excluded) */
+    c->written,				/* request length (including headers) */
+    c->read,				/* response length (including headers) */
     c->method,				/* http|https */
     (c->scheme == http)? "http": "https",
     c->host,

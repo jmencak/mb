@@ -18,7 +18,7 @@ CFLAGS  += -g
 endif
 
 ifeq ($(GIT_VERSION),)
-VERSION := 0.1
+VERSION := 0.1.1
 else
 VERSION := $(GIT_VERSION)
 endif

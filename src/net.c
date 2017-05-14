@@ -149,14 +149,17 @@ void connection_init(connection *c) {
   c->cstats.connections = 0;
   c->cstats.reqs = 0;
   c->cstats.reqs_total = 0;
+  c->cstats.written_total = 0;
+  c->cstats.read_total = 0;
   c->keep_alive_reqs = 0;
   c->tls_session_reuse = true;
   c->req_body = NULL;
   c->request = NULL;
   c->conn_close = false;
+  c->message_complete = false;
   c->written = 0;
+  c->read = 0;
   c->status = 0;
-  c->bytes_in = 0;
   c->ssl = NULL;
   c->ssl_session = NULL;
   c->duplicate = false;
@@ -370,10 +373,6 @@ void socket_connect(aeEventLoop *loop, int fd, void *data, int flags) {
   }
 
   http_parser_init(&c->parser, HTTP_RESPONSE);
-  if (cfg.file_resp) {
-    /* user specified an output file => we need to calculate size of the response body */
-    parser_settings.on_body = response_body;
-  }
   c->parser.data = c;
 
   aeCreateFileEventOrDie(loop, c->fd, AE_WRITABLE, socket_write, c);
@@ -387,6 +386,8 @@ void socket_reconnect(connection *c) {
   c->cstats.established = 0;
   c->cstats.handshake = 0;
   c->cstats.reqs = 0;
+  c->read = 0;
+  c->written = 0;
   socket_connect(c->t->loop, c->fd, c, 0);
 }
 
@@ -395,7 +396,7 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
   connection *c = data;
   bool conn_close = c->keep_alive_reqs && !(c->cstats.reqs_total % c->keep_alive_reqs);
 
-  while (true) {
+  do {
     n = SOCK_READ(c, RECVBUF);
 
     if (n < 0) {
@@ -412,7 +413,9 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
       goto err_conn;
     }
 
-    /* successfully read from a socket data or just EOF (n == 0) */
+    /* successfully read from a socket data or received EOF (n == 0) */
+    c->read += n;
+    c->cstats.read_total += n;
     c->t->buf[n] = '\0';
 
     if (c->parser.data) {
@@ -423,23 +426,19 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
         goto err_parser;
       }
     }
-
-    if (c->parser.data && http_body_is_final(&c->parser)) {
-      break;
-    }
-
-    if (n == 0) {
-      break;
-    }
-  }
+  } while (n != 0);
 
   if (conn_close || !http_should_keep_alive(&c->parser)) {
     goto reconnect;
   }
 
   /* for keep-alive mode */
-  if (http_body_is_final(&c->parser)) http_parser_init(&c->parser, HTTP_RESPONSE);
-  aeCreateFileEventOrDie(loop, c->fd, AE_WRITABLE, socket_write, c);
+  if (!c->message_complete) {
+    /* HTTP response is not yet fully retrieved */
+    return;
+  }
+  c->read = 0;
+  aeCreateFileEventOrDie(c->t->loop, c->fd, AE_WRITABLE, socket_write, c);
   return;
 
 err_parser:
@@ -499,9 +498,10 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
       c->cstats.established = now_writeable;
 
     c->written += n;
+    c->cstats.written_total += n;
 
     if (c->written == request_len) {
-      c->written = 0;
+      c->message_complete = false;
       c->cstats.reqs++;
       c->cstats.reqs_total++;
       aeDeleteFileEvent(loop, c->fd, AE_WRITABLE);
@@ -515,7 +515,6 @@ err_conn:
   c->status = 0;
   if(stats.fd) write_stats_line(stats.fd, c, "socket_write()");
   stats.err_conn++;
-  c->written = 0;
   socket_reconnect(c);
 }
 
@@ -530,7 +529,7 @@ int headers_complete(http_parser *parser) {
 }
 #endif
 
-int response_complete(http_parser *parser) {
+int message_complete(http_parser *parser) {
   connection *c = parser->data;
   int status = parser->status_code;
 
@@ -540,6 +539,8 @@ int response_complete(http_parser *parser) {
   if(stats.fd) write_stats_line(stats.fd, c, NULL);
   c->delayed = c->delay_max;
   c->cstats.established = 0;
+  c->message_complete = true;
+  c->written = 0;
 
   return 0;
 }
@@ -551,11 +552,5 @@ int header_field(http_parser *parser, const char *at, size_t len) {
 
 int header_value(http_parser *parser, const char *at, size_t len) {
   info("header_value: `%s' (%ld)\n", at, len);
-  return 0;
-}
-
-int response_body(http_parser *parser, const char *at, size_t len) {
-  connection *c = parser->data;
-  c->bytes_in = len;
   return 0;
 }

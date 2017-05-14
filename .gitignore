@@ -1,5 +1,8 @@
+*.a
+*.o
 archive
 deps
+mb
 usr
 version.h
 wolfssl

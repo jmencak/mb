@@ -60,16 +60,19 @@ typedef struct connection {
     uint64_t connections;	/* how many times we connected (initial connection + reconnections) */
     uint64_t reqs;		/* number of requests sent over the current established connection (keep-alive) */
     uint64_t reqs_total;	/* total number of requests sent over this connection */
+    uint64_t written_total;	/* total number of bytes written/sent over this connection */
+    uint64_t read_total;	/* total number of bytes received over this connection */
   } cstats;
   uint64_t keep_alive_reqs;	/* maximum number of requests that can be sent over this connection before reconnecting */
   bool tls_session_reuse;	/* enable session resumption to reestablish the connection without a new handshake */
   char *req_body;		/* HTTP request body to send to a server */
   char *request;		/* HTTP request data (headers & body combined) to send to a server */
   bool conn_close;		/* Is the current request built as "Connection: close" request? */
-  uint64_t written;		/* how many bytes of request was already written */
+  bool message_complete;	/* Do we have a complete HTTP response on this connection? */
+  uint64_t written;		/* how many bytes of request was already written/sent */
+  uint64_t read;		/* how many bytes of response was already read/received (including HTTP headers) */
   http_parser parser;		/* nginx parser */
   int status;			/* HTTP response status */
-  uint64_t bytes_in;		/* bytes (HTTP body) received during the last response */
   WOLFSSL *ssl;			/* SSL object */
   WOLFSSL_SESSION *ssl_session;	/* SSL session cache */
   bool duplicate;		/* duplicate of a previous connection */
@@ -82,7 +85,7 @@ int headers_complete(http_parser *);
 void connection_init(connection *);
 void connections_free(connection *);
 void socket_connect(aeEventLoop *, int, void *, int);
-extern int response_complete(http_parser *);
+extern int message_complete(http_parser *);
 extern int header_field(http_parser *, const char *, size_t);
 extern int header_value(http_parser *, const char *, size_t);
 extern int response_body(http_parser *, const char *, size_t);
