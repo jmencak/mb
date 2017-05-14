@@ -44,9 +44,10 @@ A simple (requests.json) example:
 A quick run with an optional output response stats file
 
     $ mb -d10 -i requests.json -o responses.csv
-    Duration [s]: 10.09
-    Total hits: 15
-    Req/s: 1.49
+    Time: 10.05s
+    Sent: 1.51kiB, 153.87B/s
+    Recv: 21.55kiB, 2.14kiB/s
+    Hits: 14, 1.39/s
 
 
 ## Credits
