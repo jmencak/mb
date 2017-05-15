@@ -95,7 +95,7 @@ where the individual `<request>`s are
       "ramp-up": <n>
     }
 
-* **host_from**: an *optional* host (typically an IP address) to bind the source to.
+* **host_from**: a host (typically an IP address) to bind the source to.
   This was implemented to work around the port exhaustion problem.
 * **scheme**: URL scheme (http|https)
 * **tls-session-reuse**: Use TLS session reuse? (true|false)
@@ -113,6 +113,8 @@ where the individual `<request>`s are
 * **delay**: random delay between requests in milliseconds.  The random delay is between **min** 
   and **max**.
 * **ramp-up**: time in seconds to "ramp up" to the **delay** above (per-thread slow start)
+
+Note that all of the above are *optional*, apart from the target **host**.
 
 ## CSV response file
 
