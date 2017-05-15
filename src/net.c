@@ -461,15 +461,15 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
   connection *c = data;
   uint64_t now_writeable;
   size_t request_len, write_len;
-
-  bool conn_close = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
-
-  if (c->request == NULL || c->conn_close != conn_close)
-    http_request_create(c, conn_close);
+  bool conn_close;
 
   if (connection_delay(c, socket_write_delay_passed))
     /* delayed connection */
     return;
+
+  conn_close = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
+  if (c->request == NULL || c->conn_close != conn_close)
+    http_request_create(c, conn_close);
 
   now_writeable = time_us();
   if (c->cstats.writeable == 0)
