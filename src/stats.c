@@ -1,9 +1,7 @@
 #include <inttypes.h>	/* PRIu64 */
-#include <pthread.h>	/* pthread_create() */
-#include <stdio.h>	/* FILE, stdout, stderr, fopen(), fclose() */
+#include <pthread.h>	/* pthread_mutex_lock() */
 
-#include "mb.h"
-#include "merr.h"
+#include "mb.h"		/* time_us() */
 #include "net.h"	/* connection struct */
 #include "stats.h"
 

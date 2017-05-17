@@ -3,11 +3,9 @@
 #include <inttypes.h>		/* PRIu64 */
 #include <pthread.h>		/* pthread_create() */
 #include <signal.h>		/* signal() */
-#include <stdarg.h>		/* va_list, ... */
 #include <stdio.h>		/* stdout, stderr, fopen(), fclose() */
 #include <stdlib.h>		/* free() */
 #include <string.h>		/* strlen() */
-#include <sys/socket.h>		/* send() */
 #include <sys/stat.h>		/* stat() */
 #include <sys/time.h>		/* gettimeofday() */
 #include <unistd.h>		/* read(), close() */

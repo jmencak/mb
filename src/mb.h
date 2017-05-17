@@ -1,12 +1,8 @@
 #ifndef MB_H
 #define MB_H
 
-#include <inttypes.h>		/* PRIu64 */
-#include <stdarg.h>		/* va_list, ... */
 #include <stdbool.h>		/* bool, true, false */
-#include <stdio.h>		/* FILE, stdout, stderr, fopen(), fclose() */
-#include <stdio.h>		/* stdout, stderr, fopen(), fclose() */
-#include <stdlib.h>		/* free() */
+#include <stdio.h>		/* FILE */
 
 #include "../nginx/http_parser.h"	/* http_parser */
 
