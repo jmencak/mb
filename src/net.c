@@ -8,13 +8,18 @@
 #include <sys/ioctl.h>		/* ioctl, FIONREAD */
 #include <sys/socket.h>		/* send/recv(), MSG_NOSIGNAL */
 #include <unistd.h>		/* read(), close() */
+#ifdef HAVE_SSL
 #include <wolfssl/ssl.h>	/* WOLFSSL_CTX */
+#endif
 
 #include "mb.h"
 #include "merr.h"
 #include "net.h"
+#include "opt.h"		/* likely/unlikely() */
+#ifdef HAVE_SSL
 #include "ssl.h"
-#include "stats.h"
+#endif
+#include "stats.h"		/* MIN/MAX() */
 
 /* Internal functions */
 void aeCreateFileEventOrDie(aeEventLoop *, int, int, aeFileProc *, void *);
@@ -22,7 +27,7 @@ static inline char *http_headers_create(connection *, bool);
 void http_request_create(connection *, bool);
 int socket_set_nonblock(int);
 static int tcp_non_block_bind_connect(connection *);
-size_t socket_readable(connection *);
+int socket_readable(int);
 static int socket_connect_delay_passed(aeEventLoop *, long long, void *);
 static int socket_write_delay_passed(aeEventLoop *, long long, void *);
 static inline bool connection_delay(connection *, aeTimeProc *);
@@ -151,6 +156,7 @@ void connection_init(connection *c) {
   c->cstats.reqs_total = 0;
   c->cstats.written_total = 0;
   c->cstats.read_total = 0;
+  c->max_reqs = 0;
   c->keep_alive_reqs = 0;
   c->tls_session_reuse = true;
   c->req_body = NULL;
@@ -160,8 +166,10 @@ void connection_init(connection *c) {
   c->written = 0;
   c->read = 0;
   c->status = 0;
+#ifdef HAVE_SSL
   c->ssl = NULL;
   c->ssl_session = NULL;
+#endif
   c->duplicate = false;
 }
 
@@ -191,7 +199,9 @@ void connections_free(connection *cs) {
 
 free_dups:
     if (cs_ptr->request) free(cs_ptr->request);
+#ifdef HAVE_SSL
     if (cs_ptr->ssl) ssl_free(cs_ptr);
+#endif
   }
 
   free(cs);
@@ -290,9 +300,9 @@ error:
   return -1;
 }
 
-size_t socket_readable(connection *c) {
+int socket_readable(int fd) {
   int n, rc;
-  rc = ioctl(c->fd, FIONREAD, &n);	/* Get the number of bytes that are immediately available for reading. */
+  rc = ioctl(fd, FIONREAD, &n);		/* Get the number of bytes that are immediately available for reading. */
   return rc == -1 ? 0 : n;
 }
 
@@ -300,7 +310,7 @@ static int socket_connect_delay_passed(aeEventLoop *loop, long long id, void *da
   connection *c = data;
   c->delayed = false;
   aeDeleteTimeEvent(loop, c->delayed_id);
-  socket_connect(c->t->loop, c->fd, c, 0);
+  socket_connect(loop, c->fd, c, 0);
   return AE_NOMORE;
 }
 
@@ -328,7 +338,7 @@ static inline bool connection_delay(connection *c, aeTimeProc *f_cb) {
       }
     }
     delay = (delay_min == delay_max)? delay_max: (rand() % (delay_max - delay_min + 1)) + delay_min;
-    if (c->fd > 0) {
+    if (c->fd != -1) {
       /* the check above is necessary, we are not necessarily connected (have a valid fd) here */
       aeDeleteFileEvent(c->t->loop, c->fd, AE_WRITABLE);
     }
@@ -344,10 +354,6 @@ static inline bool connection_delay(connection *c, aeTimeProc *f_cb) {
 
 void socket_connect(aeEventLoop *loop, int fd, void *data, int flags) {
   connection *c = data;
-
-  if (c->fd > 0) {
-    aeDeleteFileEvent(loop, c->fd, AE_READABLE | AE_WRITABLE);
-  }
 
   if (connection_delay(c, socket_connect_delay_passed))
     /* delayed connection */
@@ -367,9 +373,13 @@ void socket_connect(aeEventLoop *loop, int fd, void *data, int flags) {
   }
 
   if (c->scheme == https) {
+#ifdef HAVE_SSL
     if (!ssl_new(c)) {
       die(EXIT_FAILURE, "ssl_new() error\n");
     }
+#else
+    die(EXIT_FAILURE, "ssl support not compiled in\n");
+#endif
   }
 
   http_parser_init(&c->parser, HTTP_RESPONSE);
@@ -379,8 +389,13 @@ void socket_connect(aeEventLoop *loop, int fd, void *data, int flags) {
 }
 
 void socket_reconnect(connection *c) {
+#ifdef HAVE_SSL
   if (c->ssl) ssl_free(c);
-  if (c->fd != -1) close(c->fd);
+#endif
+  if (c->fd != -1) {
+    aeDeleteFileEvent(c->t->loop, c->fd, AE_READABLE | AE_WRITABLE);
+    close(c->fd);
+  }
   c->delayed = c->delay_max;
   c->cstats.writeable = 0;
   c->cstats.established = 0;
@@ -397,7 +412,7 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
   bool conn_close = c->keep_alive_reqs && !(c->cstats.reqs_total % c->keep_alive_reqs);
 
   do {
-    n = SOCK_READ(c, RECVBUF);
+    n = CONN_READ(c, RECVBUF);
 
     if (n < 0) {
       if (errno == EAGAIN) {
@@ -421,7 +436,7 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
     if (c->parser.data) {
       size_t n_parsed;
 
-      n_parsed = http_parser_execute(&c->parser, &parser_settings, c->t->buf, n);
+      n_parsed = http_parser_execute(&c->parser, &parser_settings, c->t->buf, (size_t)n);
       if (n_parsed != n) {
         goto err_parser;
       }
@@ -431,12 +446,13 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
   if (conn_close || !http_should_keep_alive(&c->parser)) {
     goto reconnect;
   }
+  /* we have a HTTP keep-alive connection */
 
-  /* for keep-alive mode */
   if (!c->message_complete) {
     /* HTTP response is not yet fully retrieved */
     return;
   }
+  /* we have a complete response and continue with HTTP keep-alive requests on the current connection */
   c->read = 0;
   aeCreateFileEventOrDie(c->t->loop, c->fd, AE_WRITABLE, socket_write, c);
   return;
@@ -459,7 +475,7 @@ reconnect:
 void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
   ssize_t n;
   connection *c = data;
-  uint64_t now_writeable;
+  uint64_t now_writable;
   size_t request_len, write_len;
   bool conn_close;
 
@@ -467,19 +483,25 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
     /* delayed connection */
     return;
 
+  if (c->max_reqs && c->cstats.reqs_total >= c->max_reqs) {
+    /* we reached the maximum number of hits allowed */
+    aeDeleteFileEvent(loop, c->fd, AE_WRITABLE);
+    if (requests_max_cb) requests_max_cb();
+    return;
+  }
   conn_close = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
   if (c->request == NULL || c->conn_close != conn_close)
     http_request_create(c, conn_close);
 
-  now_writeable = time_us();
+  now_writable = time_us();
   if (c->cstats.writeable == 0)
     /* first request within an established connection */
-    c->cstats.writeable = now_writeable;
+    c->cstats.writeable = now_writable;
 
   request_len = strlen(c->request);
   write_len = request_len - c->written;
 
-  n = SOCK_WRITE(c, c->request + c->written, write_len);
+  n = CONN_WRITE(c, c->request + c->written, write_len);
 
   if (n < 0) {
     if (errno == EAGAIN) {
@@ -491,16 +513,17 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
   } else {
     if (c->cstats.handshake == 0)
       /* first request within an established connection */
-      c->cstats.handshake = now_writeable;
+      c->cstats.handshake = now_writable;
 
     if (c->cstats.established == 0)
       /* a request within an established connection (keep-alive) */
-      c->cstats.established = now_writeable;
+      c->cstats.established = now_writable;
 
     c->written += n;
     c->cstats.written_total += n;
 
     if (c->written == request_len) {
+      /* writing done */
       c->message_complete = false;
       c->cstats.reqs++;
       c->cstats.reqs_total++;

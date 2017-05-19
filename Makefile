@@ -1,7 +1,6 @@
 ### User defined variables ######################################################
 DEBUG := y
-WOLFSSL_ARCHIVE := wolfssl-3.9.10.tar.gz
-WOLFSSL_URL := http://www.wolfssl.com/$(WOLFSSL_ARCHIVE)
+SSL_ENABLE := y
 
 ### Should not need to change below this line ###################################
 BIN         := mb
@@ -9,7 +8,7 @@ PWD         := $(shell pwd)
 USR_DIR	    := $(PWD)/usr
 DEP_DIR     := $(PWD)/deps
 CFLAGS      += -Wall -Wno-parentheses -Wno-switch-enum -Wno-unused-value
-LIBS        := -L$(USR_DIR)/lib -lpthread -lm -Wl,-Bstatic -lwolfssl -Wl,-Bdynamic
+LIBS        := -L$(USR_DIR)/lib -lpthread -lm
 VERSION_H   := version.h
 GIT_VERSION := $(shell git rev-parse --short=6 HEAD 2>/dev/null)
 
@@ -17,15 +16,21 @@ ifeq ($(DEBUG),y)
 CFLAGS  += -g
 endif
 
+ifeq ($(SSL_ENABLE),y)
+CFLAGS += -DHAVE_SSL
+WOLFSSL_ARCHIVE := wolfssl-3.9.10.tar.gz
+WOLFSSL_URL := http://www.wolfssl.com/$(WOLFSSL_ARCHIVE)
+WOLFSSL_DIR := wolfssl
+WOLFSSL_LIB := $(USR_DIR)/lib/libwolfssl.a
+CFLAGS += -I$(USR_DIR)/include -DHAVE_SNI -DHAVE_SECURE_RENEGOTIATION
+LIBS += -Wl,-Bstatic -lwolfssl -Wl,-Bdynamic
+endif
+
 ifeq ($(GIT_VERSION),)
-VERSION := 0.1.1
+VERSION := 0.1.2
 else
 VERSION := $(GIT_VERSION)
 endif
-
-WOLFSSL_DIR := wolfssl
-WOLFSSL_LIB := libwolfssl.a
-CFLAGS  += -I$(USR_DIR)/include -DHAVE_SNI -DHAVE_SECURE_RENEGOTIATION
 
 SRC := $(wildcard src/*.c)
 OBJ := ${SRC:.c=.o}
@@ -40,12 +45,12 @@ LIBJSON_LIB = json/libjson.a
 
 all: deps $(BIN)
 
-deps: $(LIBAE_LIB) $(LIBJSON_LIB) $(USR_DIR)/lib/$(WOLFSSL_LIB) 
+deps: $(WOLFSSL_LIB) $(LIBAE_LIB) $(LIBJSON_LIB) 
 
 $(DEP_DIR)/$(WOLFSSL_ARCHIVE):
 	curl --create-dirs -Ls $(WOLFSSL_URL) -o "$(DEP_DIR)/$(WOLFSSL_ARCHIVE)"
 
-$(USR_DIR)/lib/$(WOLFSSL_LIB): $(DEP_DIR)/$(WOLFSSL_ARCHIVE)
+$(WOLFSSL_LIB): $(DEP_DIR)/$(WOLFSSL_ARCHIVE)
 	mkdir -p $(WOLFSSL_DIR)
 	tar zxvf $(DEP_DIR)/$(WOLFSSL_ARCHIVE) --strip=1 -C $(WOLFSSL_DIR)
 	(cd $(WOLFSSL_DIR) && \
@@ -67,7 +72,7 @@ $(LIBAE_LIB): $(LIBAE_OBJ)
 $(LIBJSON_LIB): $(LIBJSON_OBJ)
 	$(AR) -rc $@ $(LIBJSON_OBJ)
 
-%.o: %.c %.h $(VERSION_H)
+%.o: %.c %.h $(VERSION_H) Makefile
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(VERSION_H):

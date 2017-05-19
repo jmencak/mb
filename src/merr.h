@@ -7,9 +7,17 @@
 #include <stdlib.h>	/* exit */
 #include <pthread.h>	/* pthread_mutex_lock() */
 
+enum merr_suppress {
+  s_none = 0,
+  s_info,
+  s_warning,
+  s_error,
+};
+
+void merr_suppress(int);
+void die_set_cb(void (*)());
 void fprintfp(FILE *, const char *, ...);
 void die(int, const char *, ...);
-void die_set_cb(void (*)());
 void error(const char *, ...);
 void warning(const char *, ...);
 void info(const char *, ...);

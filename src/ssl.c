@@ -1,17 +1,71 @@
+#ifdef HAVE_SSL
+
 #include <string.h>	/* strlen() */
 #include <sys/socket.h>	/* MSG_NOSIGNAL */
 
-#include "mb.h"		/* cfg. */
 #include "merr.h"
 #include "ssl.h"
+#include "wolfssl/options.h"
 
 /* Global variables */
 WOLFSSL_CTX *ctx = NULL;
 
-WOLFSSL_CTX *ssl_init() {
+WOLFSSL_CTX *ssl_init(int ssl_version) {
+  WOLFSSL_METHOD *method = NULL;
+
+  switch (ssl_version) {
+#ifndef NO_OLD_TLS
+  case 0:
+    method = wolfSSLv23_client_method();	/* Use highest possible version from SSLv3 - TLS 1.2 */
+    break;
+
+#ifdef WOLFSSL_ALLOW_SSLV3
+  case 1:
+    method = wolfSSLv3_client_method();
+    break;
+#endif
+
+#ifndef NO_TLS
+  case 2:
+    method = wolfTLSv1_client_method();
+    break;
+
+  case 3:
+    method = wolfTLSv1_1_client_method();
+    break;
+#endif				/* NO_TLS */
+
+#endif				/* NO_OLD_TLS */
+
+#ifndef NO_TLS
+  case 4:
+    method = wolfTLSv1_2_client_method();
+    break;
+#endif
+
+#ifdef WOLFSSL_DTLS
+#ifndef NO_OLD_TLS
+  case -1:
+    method = wolfDTLSv1_client_method();
+    break;
+#endif
+
+  case -2:
+    method = wolfDTLSv1_2_client_method();
+    break;
+#endif
+
+  default:
+    die(EXIT_FAILURE, "bad SSL version: %d\n", ssl_version);
+    break;
+  }
+
+  if (method == NULL)
+    die(EXIT_FAILURE, "unable to get SSL method\n");
+
   wolfSSL_Init();
 
-  if ((ctx = wolfSSL_CTX_new(wolfTLSv1_client_method())) != NULL) {	/* TODO: optional wolfSSLv23_client_method(), ... */
+  if ((ctx = wolfSSL_CTX_new(method)) != NULL) {
     wolfSSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, 0);
     wolfSSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT);
   }
@@ -98,7 +152,7 @@ int ssl_connect(connection *c) {
 
 ssize_t ssl_read(WOLFSSL *ssl, void *data, int sz) {
   int err;
-  int n = wolfSSL_recv(ssl, data, sz, MSG_NOSIGNAL);
+  ssize_t n = (ssize_t) wolfSSL_recv(ssl, data, sz, MSG_NOSIGNAL);
 
   if (n < 0) {
     switch (err = wolfSSL_get_error(ssl, n)) {
@@ -118,13 +172,13 @@ ssize_t ssl_read(WOLFSSL *ssl, void *data, int sz) {
   return n;
 }
 
-size_t ssl_readable(connection *c) {
+int ssl_readable(connection *c) {
   return wolfSSL_pending(c->ssl);
 }
 
 ssize_t ssl_write(WOLFSSL *ssl, void *data, int sz) {
   int err;
-  int n = wolfSSL_send(ssl, data, sz, MSG_NOSIGNAL);
+  ssize_t n = (ssize_t) wolfSSL_send(ssl, data, sz, MSG_NOSIGNAL);
 
   if (n < 0) {
     switch (err = wolfSSL_get_error(ssl, n)) {
@@ -142,3 +196,5 @@ ssize_t ssl_write(WOLFSSL *ssl, void *data, int sz) {
 
   return n;
 }
+
+#endif /* HAVE_SSL */

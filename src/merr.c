@@ -2,6 +2,15 @@
 
 pthread_mutex_t stderr_lock = PTHREAD_MUTEX_INITIALIZER;
 static void (*die_cb)() = NULL;
+static int suppress = s_none;
+
+void merr_suppress(int s) {
+  suppress = s;
+}
+
+void die_set_cb(void (*cb)(int)) {
+  die_cb = cb;
+}
 
 void fprintfp(FILE *fd, const char *fmt, ...) {
   va_list ap;
@@ -30,12 +39,10 @@ void die(int err, const char *fmt, ...) {
   exit(err);
 }
 
-void die_set_cb(void (*cb)(int)) {
-  die_cb = cb;
-}
-
 void error(const char *fmt, ...) {
   va_list ap;
+
+  if (suppress >= s_error) return;
 
   va_start(ap, fmt);
 
@@ -50,6 +57,8 @@ void error(const char *fmt, ...) {
 void warning(const char *fmt, ...) {
   va_list ap;
 
+  if (suppress >= s_warning) return;
+
   va_start(ap, fmt);
 
   pthread_mutex_lock(&stderr_lock);
@@ -62,6 +71,8 @@ void warning(const char *fmt, ...) {
 
 void info(const char *fmt, ...) {
   va_list ap;
+
+  if (suppress >= s_info) return;
 
   va_start(ap, fmt);
 

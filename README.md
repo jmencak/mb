@@ -86,6 +86,7 @@ where the individual `<request>`s are
         "X-Custom-Header-n": <s>
       },
       "body": <s>,
+      "max-requests": <n>,
       "keep-alive-requests": <n>,
       "clients": <n>,
       "delay": {
@@ -105,9 +106,12 @@ where the individual `<request>`s are
 * **path**: URL path
 * **headers**: an array of custom HTTP headers
 * **body**: HTTP requests body
+* **max-requests**: how many HTTP requests to send to **host** in total.  If the value is 0 or
+  unspecified, the requests will be sent for the entire duration of the test.  If there is no more
+  HTTP requests to be sent for all hosts, the test may finish earlier than specified.
 * **keep-alive-requests**: how many HTTP requests to send within a single TCP connection, including 
-  the last "Connection: close" request.  If the value is 0, the "Connection: close" will never be
-  sent.
+  the last "Connection: close" request.  If the value is 0 or unspecified, the 
+  "Connection: close" will never be sent.
 * **clients**: How many TCP connections to open against the target **host**.  This simulates 
   concurrent client requests as the TCP connections do not block.
 * **delay**: random delay between requests in milliseconds.  The random delay is between **min** 
@@ -121,7 +125,7 @@ Note that all of the above are *optional*, apart from the target **host**.
 The optional request-response output CSV file has the following format:
 
 ```
-start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_id(7),conn_id(8),conns(9),reqs(10),start(11),socket_writeable(12),conn_est(13),err(14)
+start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_id(7),conn_id(8),conns(9),reqs(10),start(11),socket_writable(12),conn_est(13),err(14)
 ```
 
 * **start_request**: start of the request since the Epoch in microseconds.  For a HTTP 
@@ -150,13 +154,13 @@ start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_
 * **start**: time in microseconds (since the Epoch) we first tried to establish
   this connection.  Note that this time is equal for all HTTP keep-alive requests
   for this connection (if any).
-* **socket_writeable**: time in microseconds it took for the socket to become 
+* **socket_writable**: time in microseconds it took for the socket to become 
   writeable (since **start**).  Note that this time the same for all HTTP 
   keep-alive requests within a connection.
 * **conn_est**: time in microseconds it took to establish this connection (since
   **start**).  Note that this connection establishment delay is the 
   same for all HTTP keep-alive requests within a connection.  Also, for plain 
-  HTTP requests this delay is equal to the **socket_writeable** 
+  HTTP requests this delay is equal to the **socket_writable** 
   value.  For TLS connections, the delay is increased by the TLS handshake.
 * **err**: an optional error message in case of a failure
 

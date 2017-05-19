@@ -13,6 +13,7 @@
 #define MB_CFG_DURATION	5	/* default duration [s] */
 #define MB_CFG_THREADS	1	/* default number of threads */
 #define MB_FD_START	128	/* usually start with fd 5, but give us some more room */
+#define MB_TLS_VERSION 0	/* SSL version: auto(0), see cfg.ssl_version */
 
 /* Statistics */
 typedef struct statistics {
@@ -26,10 +27,11 @@ typedef struct statistics {
 /* Client options */
 typedef struct config {
   uint64_t duration;		/* duration of the test run [s] */
-  uint64_t ramp_up;		/* thread ramp-up time [s] */
-  uint64_t threads;		/* number of threads */
   char *file_req;		/* input file with individual requests */
   char *file_resp;		/* JMeter-style output file with individual response statistics */
+  uint64_t ramp_up;		/* thread ramp-up time [s] */
+  int ssl_version;		/* SSL version: auto(0), SSLv3(1) - TLS1.2(4) */
+  uint64_t threads;		/* number of threads */
 
   bool ssl;			/* seen https protocol during parsing file with requests => initialize ssl */
 } config;

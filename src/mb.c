@@ -16,16 +16,20 @@
 #include "mb.h"
 #include "merr.h"
 #include "net.h"
+#ifdef HAVE_SSL
 #include "ssl.h"
+#endif
+#include "stats.h"		/* MIN/MAX() */
 
 /* Module variables */
-struct config cfg;			/* client options */
-statistics stats;			/* statistics */
+struct config cfg;				/* client options */
+statistics stats;				/* statistics */
+void (*requests_max_cb)() = NULL;
 
 /* Global variables */
 static connection *cs;
-static int connections = 0;		/* number of connections defined in input requests file */
-static volatile sig_atomic_t stop = 0;	/* thread termination variable */
+static int connections = 0;			/* number of connections defined in input requests file */
+static volatile sig_atomic_t run;		/* thread termination variable */
 
 struct http_parser_settings parser_settings = {
   .on_message_complete	= message_complete,
@@ -41,7 +45,9 @@ static struct option longopts[] = {
   { "duration",      required_argument, NULL, 'd' },
   { "request-file",  required_argument, NULL, 'i' },
   { "response-file", required_argument, NULL, 'o' },
+  { "quiet",         required_argument, NULL, 'q' },
   { "ramp-up",       required_argument, NULL, 'r' },
+  { "ssl-version",   required_argument, NULL, 's' },
   { "threads",       required_argument, NULL, 't' },
   { "version",       no_argument,       NULL, 'v' },
   { NULL,            0,                 NULL,  0  }
@@ -67,21 +73,26 @@ static int json_process_connection(json_value *, connection *);
 static int json_process_connections(json_value *);
 int requests_read(const char *);
 static int args_parse(struct config *, int, char **);
+#ifdef HAVE_SSL
 void ssl_ctx_init();
+#endif
 static int watchdog(aeEventLoop *, long long, void *);
 void *thread_main(void *);
 void threads_start();
+static void requests_done();
 
 static void usage(int ret) {
   fprintf(stderr, "Usage: " PGNAME " <options>\n"
                   "Options:\n"
-                  "  -d, --duration <n>         test duration (including ramp-up) [s]\n"
+                  "  -d, --duration <n>         test duration (including ramp-up) [s]: %d\n"
                   "  -i, --request-file <s>     input request file\n"
                   "  -o, --response-file <s>    output response stats file\n"
-                  "  -r, --ramp-up <n>          thread ramp-up time [s]\n"
-                  "  -t, --threads <n>          number of worker threads\n"
+                  "  -q, --quiet                quiet mode\n"
+                  "  -r, --ramp-up <n>          thread ramp-up time [s]: %"PRIu64"\n"
+                  "  -s, --ssl-version <n>      SSL version: auto(0), SSLv3(1) - TLS1.2(4) [%d]\n"
+                  "  -t, --threads <n>          number of worker threads: %"PRIu64"\n"
                   "  -v, --version              print version details\n"
-                  "\n"
+                  "\n", MB_CFG_DURATION, cfg.ramp_up, MB_TLS_VERSION, cfg.threads
           );
 
   if (ret >= 0) exit(ret);
@@ -130,7 +141,7 @@ static char *format_bytes(char *dst, long double n) {
   const char **suffix_ptr = suffix;
   int base = 1024;
 
-  while(n > base) {
+  while (n > base) {
     n /= base;
     if (*suffix_ptr) suffix_ptr++;
   }
@@ -180,7 +191,9 @@ void exit_handler() {
   stats_print();
   stats_close();
   connections_free(cs);
+#ifdef HAVE_SSL
   ssl_shutdown();
+#endif
 }
 
 void mb_threads_auto() {
@@ -194,7 +207,7 @@ void mb_threads_auto() {
 }
 
 void sig_int_term(int sig) {
-  stop = 1;
+  run = 0;
 }
 
 /* Set signal handlers */
@@ -311,6 +324,9 @@ static int json_process_connection(json_value *value, connection *c) {
       json_check_value(value->u.object.values[i].value, json_string, "string expected for scheme");
       if (!strcmp(v, "http")) c->scheme = http;
       else if (!strcmp(v, "https")) {
+#ifndef HAVE_SSL
+        die(EXIT_FAILURE, "ssl support not compiled in\n");
+#endif
         c->scheme = https;
         cfg.ssl = true;
       }
@@ -334,6 +350,10 @@ static int json_process_connection(json_value *value, connection *c) {
       json_check_value(value->u.object.values[i].value, json_string, "string expected for body");
       if (c->req_body != NULL) free(c->req_body);
       c->req_body = mstrdup(v);
+    } else if (!strcmp(k, "max-requests")) {
+      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for max-requests");
+      c->max_reqs = value->u.object.values[i].value->u.integer;
+      if (c->max_reqs < 0) die(EXIT_FAILURE, "max-requests must be >= 0\n", optarg);
     } else if (!strcmp(k, "keep-alive-requests")) {
       json_check_value(value->u.object.values[i].value, json_integer, "integer expected for keep-alive-requests");
       c->keep_alive_reqs = value->u.object.values[i].value->u.integer;
@@ -465,12 +485,13 @@ static int args_parse(struct config *cfg, int argc, char **argv) {
   char *p_err;
 
   cfg->duration = MB_CFG_DURATION;	/* default duration */
-  cfg->ramp_up = 0;
   cfg->file_req = NULL;
   cfg->file_resp = NULL;
+  cfg->ramp_up = 0;
+  cfg->ssl_version = MB_TLS_VERSION;
   cfg->ssl = false;
 
-  while ((c = getopt_long(argc, argv, "d:i:o:r:t:hv", longopts, NULL)) != -1) {
+  while ((c = getopt_long(argc, argv, "d:i:o:r:s:t:hqv", longopts, NULL)) != -1) {
     switch (c) {
       case 'd':
         cfg->duration = strtol(optarg, &p_err, 0);
@@ -496,6 +517,14 @@ static int args_parse(struct config *cfg, int argc, char **argv) {
         if (cfg->ramp_up < 0 || optarg[0] == '-') die(EXIT_FAILURE, "ramp-up must be > 0\n", optarg);
         break;
 
+      case 's':
+        cfg->ssl_version = strtol(optarg, &p_err, 0);
+        if (p_err == optarg || *p_err) {
+          die(EXIT_FAILURE, "ssl-version: `%s' not an integer\n", optarg);
+        }
+        if (cfg->ssl_version < 0 || cfg->ssl_version > 4 || optarg[0] == '-') die(EXIT_FAILURE, "ssl-version must be >= 0 and <= 4\n", optarg);
+        break;
+
       case 't':
         cfg->threads = strtol(optarg, &p_err, 0);
         if (p_err == optarg || *p_err) {
@@ -506,6 +535,10 @@ static int args_parse(struct config *cfg, int argc, char **argv) {
 
       case 'h':
         usage(EXIT_SUCCESS);
+        break;
+
+      case 'q':
+        merr_suppress(s_info);		/* suppress info messages */
         break;
 
       case 'v':
@@ -534,14 +567,16 @@ static int args_parse(struct config *cfg, int argc, char **argv) {
   return 0;
 }
 
+#ifdef HAVE_SSL
 void ssl_ctx_init() {
-  if (cfg.ssl && ssl_init() == NULL) {
+  if (cfg.ssl && ssl_init(cfg.ssl_version) == NULL) {
     die(EXIT_FAILURE, "unable to initialize SSL\n");
   }
 }
+#endif
 
 static int watchdog(aeEventLoop *loop, long long id, void *data) {
-  if (stop) aeStop(loop);
+  if (run <= 0) aeStop(loop);
 
   return WATCHDOG_MS;
 }
@@ -556,7 +591,7 @@ void *thread_main(void *arg) {
   connection *cs_ptr_end = (t->id == cfg.threads - 1)? cs + connections: cs + (connections_per_thread * (t->id + 1));
 
   if (t->id >= connections) {
-    warning("stopping thread %d, less connections (%d) than threads\n", t->id + 1, connections);
+    warning("stopping thread %d, connections (%d) < threads (%d)\n", t->id + 1, connections, cfg.threads);
     goto out;
   }
 
@@ -587,21 +622,24 @@ void *thread_main(void *arg) {
   aeDeleteEventLoop(t->loop);
 
 out:
-  return (void*) t->id;
+  return (void *)t;
 }
 
 void threads_start() {
   pthread_attr_t attr;
-  uint64_t i;
-  int rc;
-  void *status;
-  uint64_t run_time, thread_delay, start;
+  int i, r;
+  void *thread_retval;			/* pointer to data returned by the terminating thread */
+  uint64_t thread_delay, start;
+  int64_t run_time;
   thread *threads;
 
   if (cfg.threads > connections) {
     info("threads (%d) > connections (%d): lowering the number of threads to %d\n", cfg.threads, connections, connections);
     cfg.threads = connections;
   }
+
+  /* set callback function once the maximum number of requests is reached */
+  requests_max_cb = requests_done;
 
   /* initialize and set thread detached attribute */
   if ((threads = calloc(cfg.threads, sizeof(thread))) == NULL)
@@ -613,12 +651,13 @@ void threads_start() {
   start = time_us();
 
   /* start the worker threads */
-  for(i = 0; i < cfg.threads; i++) {
+  run = connections;			/* set this before starting threads */
+  for (i = 0; i < cfg.threads; i++) {
     thread *t = &threads[i];
     t->id = i;
-    rc = pthread_create(&t->thread, &attr, thread_main, (void *)t);
-    if (rc) {
-      die(EXIT_FAILURE, "unable to create thread %"PRIu64": %s\n", i, strerror(errno));
+    r = pthread_create(&t->thread, &attr, thread_main, (void *)t);
+    if (r) {
+      die(EXIT_FAILURE, "unable to create thread %d: %s\n", i, strerror(errno));
     }
     if (thread_delay && (i + 1) < cfg.threads) usleep(thread_delay);
   }
@@ -627,21 +666,39 @@ void threads_start() {
   pthread_attr_destroy(&attr);
 
   /* wait for the threads to do their job */
-  run_time = (cfg.duration * 1000000) - (time_us() - start);
-  if (run_time > 0) usleep(run_time);
-  stop = 1;
+  while (true) {
+    run_time = (cfg.duration * 1000000) - (time_us() - start);
+    if (run_time > 0 && run > 0) {
+      usleep(MIN(run_time, WATCHDOG_MS * 1000));
+    } else break;
+  };
+  run = 0;
 
   /* pthread_join */
-  for(i = 0; i < cfg.threads; i++) {
+  for (i = 0; i < cfg.threads; i++) {
     thread *t = &threads[i];
-    rc = pthread_join(t->thread, &status);
-    if (rc) {
-      die(EXIT_FAILURE, "return code from pthread_join() was %d for thread %"PRIu64"\n", rc, i);
+    r = pthread_join(t->thread, &thread_retval);
+    if (r) {
+      die(EXIT_FAILURE, "return value from pthread_join() was %d for thread %d\n", r, i);
     }
   }
 
   if (threads != NULL) free(threads);
 }
+
+/* called once we stop sending requests on a connection */
+#if 1
+pthread_mutex_t run_lock = PTHREAD_MUTEX_INITIALIZER;
+static void requests_done() {
+  pthread_mutex_lock(&run_lock);
+  run--;
+  pthread_mutex_unlock(&run_lock);
+}
+#else
+static void requests_done() {
+  __sync_fetch_and_sub(&run, 1);
+}
+#endif
 
 int main(int argc, char **argv) {
   /* figure out the number of worker threads based on the hardware we have */
@@ -656,8 +713,10 @@ int main(int argc, char **argv) {
   /* handle normal exit and catch some signals */
   signals_set();
 
+#ifdef HAVE_SSL
   /* initialise ssl ctx */
   ssl_ctx_init();
+#endif
 
   /* initialise the statistics structure and open stats file for writing if required to do so */
   stats_init();

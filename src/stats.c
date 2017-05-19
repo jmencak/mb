@@ -24,7 +24,7 @@ int write_stats_line(FILE *fd, connection *c, char *err) {
     delay = now - c->cstats.established;
   }
 
-  int len = snprintf(s, BUFSIZ, "%"PRIu64",%"PRIu64",%d,%"PRIu64",%"PRIu64",%s %s://%s:%d%s,%"PRIu64",%d,%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%s\n",
+  int len = snprintf(s, BUFSIZ, "%"PRIu64",%"PRIu64",%d,%"PRIu64",%"PRIu64",%s %s://%s:%d%s,%d,%d,%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%s\n",
     start_request,
     delay,
     c->status,				/* HTTP response status */
