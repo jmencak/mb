@@ -15,7 +15,6 @@
 #include "mb.h"
 #include "merr.h"
 #include "net.h"
-#include "opt.h"		/* likely/unlikely() */
 #ifdef HAVE_SSL
 #include "ssl.h"
 #endif
