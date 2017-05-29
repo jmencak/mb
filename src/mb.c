@@ -382,6 +382,19 @@ static int json_process_connection(json_value *value, connection *c) {
     die(EXIT_FAILURE, "invalid input request file, port not defined\n");
   }
 
+  /* resolve the target host and service */
+  if (!c->addr_to) {
+    /* translating addresses comes at a cost, cache the structures */
+    if (host_resolve(c->host, c->port, &c->addr_to) < 0)
+      die(EXIT_FAILURE, "cannot resolve: %s:%d\n", c->host, c->port);
+  }
+
+  /* resolve the source host if any */
+  if (c->host_from) {
+    if (host_resolve(c->host_from, 0, &c->addr_from) < 0)
+      die(EXIT_FAILURE, "cannot resolve: %s\n", c->host_from);
+  }
+
   return clients;
 }
 

@@ -56,7 +56,9 @@ typedef struct connection {
   scheme scheme;		/* http/https */
   char *host;			/* target host */
   int port;			/* target port */
-  char *method;			/* method: (GET, HEAD, POST, PUT, DELETE, ... */
+  struct addrinfo *addr_from;	/* translated network address and service information for host_from */
+  struct addrinfo *addr_to;	/* translated network address and service information for host/port */
+  char *method;			/* method: (GET, HEAD, POST, PUT, DELETE, ...) */
   char *path;			/* URL path */
   key_value *headers;		/* key/value header pairs */
   uint64_t delay_min;		/* minimum delay between requests on the connection [ms] */
@@ -99,6 +101,7 @@ int headers_complete(http_parser *);
 #endif
 void connection_init(connection *);
 void connections_free(connection *);
+int host_resolve(char *host, int port, struct addrinfo **addr);
 void socket_connect(aeEventLoop *, int, void *, int);
 extern int message_complete(http_parser *);
 extern int header_field(http_parser *, const char *, size_t);

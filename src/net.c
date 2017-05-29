@@ -138,6 +138,8 @@ void connection_init(connection *c) {
   c->scheme = http;
   c->host = NULL;
   c->port = 80;
+  c->addr_from = NULL;
+  c->addr_to = NULL;
   c->method = NULL;
   c->path = NULL;
   c->headers = NULL;
@@ -184,6 +186,8 @@ void connections_free(connection *cs) {
     }
     if (cs_ptr->host_from) free(cs_ptr->host_from);
     if (cs_ptr->host) free(cs_ptr->host);
+    if (cs_ptr->addr_from) freeaddrinfo(cs_ptr->addr_from);
+    if (cs_ptr->addr_to) freeaddrinfo(cs_ptr->addr_to);
     if (cs_ptr->method) free(cs_ptr->method);
     if (cs_ptr->path) free(cs_ptr->path);
     if (cs_ptr->headers) {
@@ -222,23 +226,34 @@ int socket_set_nonblock(int fd) {
   return 0;
 }
 
-pthread_mutex_t socket_lock = PTHREAD_MUTEX_INITIALIZER;
-static int tcp_non_block_bind_connect(connection *c) {
+/* network address and service translation */
+int host_resolve(char *host, int port, struct addrinfo **addr) {
   char portstr[6];		/* strlen("65535") + 1 */
-  int fd, rc, flags = 1;
-  struct addrinfo *addr, *addr_from, *a, *b;
+  int rc;
   struct addrinfo hints = {
     .ai_family = AF_UNSPEC,
     .ai_socktype = SOCK_STREAM
   };
 
-  snprintf(portstr, sizeof(portstr), "%d", c->port);
-  if ((rc = getaddrinfo(c->host, portstr, &hints, &addr)) != 0) {
-    error("unable to resolve %s:%s: %s\n", c->host, portstr, gai_strerror(rc));
+  if (addr == NULL) return -1;
+  if (*addr) freeaddrinfo(*addr);
+
+  /* we have not translated network address and service information for this host yet */
+  snprintf(portstr, sizeof(portstr), "%d", port);
+  if ((rc = getaddrinfo(host, portstr, &hints, addr)) != 0) {
+    error("unable to resolve %s:%s: %s\n", host, portstr, gai_strerror(rc));
     return -1;
   }
 
-  for (a = addr; a != NULL; a = a->ai_next) {
+  return 0;
+}
+
+pthread_mutex_t socket_lock = PTHREAD_MUTEX_INITIALIZER;
+static int tcp_non_block_bind_connect(connection *c) {
+  int fd, rc, flags = 1;
+  struct addrinfo *a, *b;
+
+  for (a = c->addr_to; a != NULL; a = a->ai_next) {
     pthread_mutex_lock(&socket_lock);
     /* this critical section prevents coredumps when there are too many open files (the call below returns fd < 0) */
     fd = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
@@ -259,19 +274,15 @@ static int tcp_non_block_bind_connect(connection *c) {
 
     if (socket_set_nonblock(fd)) goto error;
 
-    if (c->host_from) {
+    if (c->addr_from) {
       bool bound = false;
-      if ((rc = getaddrinfo(c->host_from, NULL, &hints, &addr_from)) != 0) {
-        error("unable to resolve source %s: %s\n", c->host_from, gai_strerror(rc));
-        goto error;
-      }
-      for (b = addr_from; b != NULL; b = b->ai_next) {
+
+      for (b = c->addr_from; b != NULL; b = b->ai_next) {
         if ((rc = bind(fd, b->ai_addr, b->ai_addrlen)) != -1) {
           bound = true;
           break;
         }
       }
-      freeaddrinfo(addr_from);
       if (!bound) {
         error("unable to bind source %s: %s\n", c->host_from, gai_strerror(rc));
         goto error;
@@ -288,7 +299,6 @@ static int tcp_non_block_bind_connect(connection *c) {
     }
 
 end:
-    freeaddrinfo(addr);
     return fd;
   }
   if (a == NULL)
