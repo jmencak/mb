@@ -418,14 +418,13 @@ void socket_reconnect(connection *c) {
 void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
   ssize_t n;
   connection *c = data;
-  bool conn_close = c->keep_alive_reqs && !(c->cstats.reqs_total % c->keep_alive_reqs);
 
   do {
     n = CONN_READ(c, RECVBUF);
 
     if (n < 0) {
       if (errno == EAGAIN) {
-        if (conn_close) {
+        if (c->conn_close) {
           /* Request with "Connection: close" header. */
           return;
         }
@@ -433,7 +432,7 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
         break;
       }
 
-      error("cannot read from [%d] (%s:%d): %d: reconnecting...\n", c->fd, c->host, c->port, errno);
+      error("cannot read from [%d] (%s:%d): %s: reconnecting...\n", c->fd, c->host, c->port, strerror(errno));
       goto err_conn;
     }
 
@@ -445,14 +444,16 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
     if (c->parser.data) {
       size_t n_parsed;
 
+      int old_state=c->parser.state;
       n_parsed = http_parser_execute(&c->parser, &parser_settings, c->t->buf, (size_t)n);
       if (n_parsed != n) {
+        error("parser [%d] (%s:%d): %lu != %lu; %d->%d; reconnecting...\n", c->fd, c->host, c->port, n_parsed, n, old_state, c->parser.state);
         goto err_parser;
       }
     }
   } while (n != 0);
 
-  if (conn_close || !http_should_keep_alive(&c->parser)) {
+  if (c->conn_close || !http_should_keep_alive(&c->parser)) {
     goto reconnect;
   }
   /* we have a HTTP keep-alive connection */
@@ -468,13 +469,13 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
 
 err_parser:
   c->status = 0;
-  if(stats.fd) write_stats_line(stats.fd, c, "socket_read(): parser");
+  if (stats.fd) write_stats_line(stats.fd, c, "socket_read(): parser");
   stats.err_parser++;
   goto reconnect;
 
 err_conn:
   c->status = 0;
-  if(stats.fd) write_stats_line(stats.fd, c, "socket_read(): connection");
+  if (stats.fd) write_stats_line(stats.fd, c, "socket_read(): connection");
   stats.err_conn++;
 
 reconnect:
@@ -517,7 +518,7 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
       return;
     }
 
-    error("cannot write to [%d] (%s:%d): %d: reconnecting...\n", c->fd, c->host, c->port, errno);
+    error("cannot write to [%d] (%s:%d): %s: reconnecting...\n", c->fd, c->host, c->port, strerror(errno));
     goto err_conn;
   } else {
     if (c->cstats.handshake == 0)
@@ -545,7 +546,7 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
 
 err_conn:
   c->status = 0;
-  if(stats.fd) write_stats_line(stats.fd, c, "socket_write()");
+  if (stats.fd) write_stats_line(stats.fd, c, "socket_write()");
   stats.err_conn++;
   socket_reconnect(c);
 }
@@ -568,7 +569,7 @@ int message_complete(http_parser *parser) {
   if (status > 399) stats.err_status++;
 
   c->status = status;
-  if(stats.fd) write_stats_line(stats.fd, c, NULL);
+  if (stats.fd) write_stats_line(stats.fd, c, NULL);
   c->delayed = c->delay_max;
   c->cstats.established = 0;
   c->message_complete = true;
