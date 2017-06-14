@@ -711,8 +711,10 @@ size_t http_parser_execute (http_parser *parser,
 
       case s_start_req_or_res:
       {
+#if 0	/* Follow RFC 2616, no leading CR/LF characters in request or response */
         if (ch == CR || ch == LF)
           break;
+#endif
         parser->flags = 0;
         parser->content_length = ULLONG_MAX;
 
@@ -756,9 +758,11 @@ size_t http_parser_execute (http_parser *parser,
             UPDATE_STATE(s_res_H);
             break;
 
+#if 0	/* Follow RFC 2616, no leading CR/LF characters in request or response */
           case CR:
           case LF:
             break;
+#endif
 
           default:
             SET_ERRNO(HPE_INVALID_CONSTANT);
@@ -944,8 +948,10 @@ size_t http_parser_execute (http_parser *parser,
 
       case s_start_req:
       {
+#if 0	/* Follow RFC 2616, no leading CR/LF characters in request or response */
         if (ch == CR || ch == LF)
           break;
+#endif
         parser->flags = 0;
         parser->content_length = ULLONG_MAX;
 
