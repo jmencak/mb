@@ -23,7 +23,7 @@
 /* Internal functions */
 void aeCreateFileEventOrDie(aeEventLoop *, int, int, aeFileProc *, void *);
 static inline char *http_headers_create(connection *, bool);
-void http_request_create(connection *, bool);
+void http_request_create(connection *, const char *, char **, size_t *);
 int socket_set_nonblock(int);
 static int tcp_non_block_bind_connect(connection *);
 int socket_readable(int);
@@ -107,27 +107,35 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
   return headers;
 }
 
-void http_request_create(connection *c, bool conn_close) {
-  char *headers;
-
-  if (c->request) {
-    free(c->request);
-    c->request = NULL;
+void http_request_create(connection *c, const char *headers, char **request, size_t *length)
+{
+  if ((*request = malloc(MAX_REQ_LEN + 1)) == NULL) {
+    fprintf(stderr, "malloc(): cannot allocate memory for HTTP request\n");
+    exit(EXIT_FAILURE);
   }
 
-  headers = http_headers_create(c, conn_close);
-  c->conn_close = conn_close;
+  snprintf(*request, MAX_REQ_LEN, HTTP_REQUEST,
+	   c->method ? c->method : "GET",
+	   c->path ? c->path : "/1",
+	   c->host ? c->host : "localhost",
+	   headers? headers: "",
+	   c->req_body ? c->req_body : "");
 
-  if ((c->request = malloc(MAX_REQ_LEN+1)) == NULL)
-    die(EXIT_FAILURE, "malloc(): cannot allocate memory for HTTP request\n");
+  *length = strlen(*request);
+}
 
-  snprintf(c->request, MAX_REQ_LEN, HTTP_REQUEST,
-    c->method? c->method: "GET",
-    c->path? c->path: "/",
-    c->host,
-    headers,
-    c->req_body? c->req_body: "");
+void http_requests_create(connection *c)
+{
+  char *headers;
 
+  if (c->request) free(c->request);
+  if (c->request_cclose) free(c->request_cclose);
+
+  headers = http_headers_create(c, 0);
+  http_request_create(c, headers, &c->request, &c->request_length);
+  if (headers) free(headers);
+  headers = http_headers_create(c, 1);
+  http_request_create(c, headers, &c->request_cclose, &c->request_cclose_length);
   if (headers) free(headers);
 }
 
@@ -162,7 +170,10 @@ void connection_init(connection *c) {
   c->tls_session_reuse = true;
   c->req_body = NULL;
   c->request = NULL;
+  c->request_cclose = NULL;
   c->conn_close = false;
+  c->request_length = 0;
+  c->request_cclose_length = 0;
   c->message_complete = false;
   c->written = 0;
   c->read = 0;
@@ -199,9 +210,10 @@ void connections_free(connection *cs) {
       free(cs_ptr->headers);
     }
     if (cs_ptr->req_body) free(cs_ptr->req_body);
+    if (cs_ptr->request) free(cs_ptr->request);
+    if (cs_ptr->request_cclose) free(cs_ptr->request_cclose);
 
 free_dups:
-    if (cs_ptr->request) free(cs_ptr->request);
 #ifdef HAVE_SSL
     if (cs_ptr->ssl) ssl_free(cs_ptr);
 #endif
@@ -431,6 +443,10 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
         /* HTTP keep-alive request */
         break;
       }
+      if (c->message_complete) {
+        /* message already complete, reconnect or send more data if keep-alive */
+        break;
+      }
 
       error("cannot read from [%d] (%s:%d): %s: reconnecting...\n", c->fd, c->host, c->port, strerror(errno));
       goto err_conn;
@@ -487,7 +503,7 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
   connection *c = data;
   uint64_t now_writable;
   size_t request_len, write_len;
-  bool conn_close;
+  char *request;
 
   if (connection_delay(c, socket_write_delay_passed))
     /* delayed connection */
@@ -499,19 +515,23 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
     if (requests_max_cb) requests_max_cb();
     return;
   }
-  conn_close = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
-  if (c->request == NULL || c->conn_close != conn_close)
-    http_request_create(c, conn_close);
+  c->conn_close = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
+  if (c->conn_close) {
+    request = c->request_cclose;
+    request_len = c->request_cclose_length;
+  } else {
+    request = c->request;
+    request_len = c->request_length;
+  }
 
   now_writable = time_us();
   if (c->cstats.writeable == 0)
     /* first request within an established connection */
     c->cstats.writeable = now_writable;
 
-  request_len = strlen(c->request);
   write_len = request_len - c->written;
 
-  n = CONN_WRITE(c, c->request + c->written, write_len);
+  n = CONN_WRITE(c, request + c->written, write_len);
 
   if (n < 0) {
     if (errno == EAGAIN) {

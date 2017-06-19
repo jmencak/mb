@@ -395,6 +395,9 @@ static int json_process_connection(json_value *value, connection *c) {
       die(EXIT_FAILURE, "cannot resolve: %s\n", c->host_from);
   }
 
+  /* prepare HTTP data to send over a socket */
+  http_requests_create(c);
+
   return clients;
 }
 

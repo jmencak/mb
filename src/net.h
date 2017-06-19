@@ -81,8 +81,11 @@ typedef struct connection {
   uint64_t keep_alive_reqs;	/* maximum number of requests that can be sent over this connection before reconnecting */
   bool tls_session_reuse;	/* enable session resumption to reestablish the connection without a new handshake */
   char *req_body;		/* HTTP request body to send to a server */
-  char *request;		/* HTTP request data (headers & body combined) to send to a server */
+  char *request;		/* HTTP request data (headers & body combined) to send to a server (keep-alive) */
+  char *request_cclose;		/* HTTP request data (headers & body combined) to send to a server ("Connection: close") */
   bool conn_close;		/* Is the current request built as "Connection: close" request? */
+  size_t request_length;	/* HTTP request data (headers & body combined) to send to a server length (keep-alive) */
+  size_t request_cclose_length;	/* HTTP request data (headers & body combined) to send to a server length ("Connection: close") */
   bool message_complete;	/* Do we have a complete HTTP response on this connection? */
   uint64_t written;		/* how many bytes of request was already written/sent */
   uint64_t read;		/* how many bytes of response was already read/received (including HTTP headers) */
@@ -96,13 +99,14 @@ typedef struct connection {
 } connection;
 
 /* Module functions */
-#if 0
-int headers_complete(http_parser *);
-#endif
+void http_requests_create(connection *);
 void connection_init(connection *);
 void connections_free(connection *);
 int host_resolve(char *host, int port, struct addrinfo **addr);
 void socket_connect(aeEventLoop *, int, void *, int);
+#if 0
+int headers_complete(http_parser *);
+#endif
 extern int message_complete(http_parser *);
 extern int header_field(http_parser *, const char *, size_t);
 extern int header_value(http_parser *, const char *, size_t);
