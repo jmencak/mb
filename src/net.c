@@ -339,7 +339,7 @@ static int socket_write_delay_passed(aeEventLoop *loop, long long id, void *data
   connection *c = data;
   c->delayed = false;
   aeDeleteTimeEvent(loop, c->delayed_id);
-  aeCreateFileEvent(loop, c->fd, AE_WRITABLE, socket_write, c);
+  aeCreateFileEventOrDie(loop, c->fd, AE_WRITABLE, socket_write, c);
   return AE_NOMORE;
 }
 
