@@ -77,7 +77,7 @@ typedef struct connection {
     uint64_t written_total;	/* total number of bytes written/sent over this connection */
     uint64_t read_total;	/* total number of bytes received over this connection */
   } cstats;
-  uint64_t max_reqs;		/* maximum number of requests to send over this connection (including reconnects) */
+  uint64_t reqs_max;		/* maximum number of requests to send over this connection (including reconnects) */
   uint64_t keep_alive_reqs;	/* maximum number of requests that can be sent over this connection before reconnecting */
   bool tls_session_reuse;	/* enable session resumption to reestablish the connection without a new handshake */
   char *req_body;		/* HTTP request body to send to a server */

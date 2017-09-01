@@ -165,7 +165,7 @@ void connection_init(connection *c) {
   c->cstats.reqs_total = 0;
   c->cstats.written_total = 0;
   c->cstats.read_total = 0;
-  c->max_reqs = 0;
+  c->reqs_max = 0;
   c->keep_alive_reqs = 0;
   c->tls_session_reuse = true;
   c->req_body = NULL;
@@ -509,7 +509,7 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
     /* delayed connection */
     return;
 
-  if (c->max_reqs && c->cstats.reqs_total >= c->max_reqs) {
+  if (c->reqs_max && c->cstats.reqs_total >= c->reqs_max) {
     /* we reached the maximum number of hits allowed */
     aeDeleteFileEvent(loop, c->fd, AE_WRITABLE);
     if (requests_max_cb) requests_max_cb();

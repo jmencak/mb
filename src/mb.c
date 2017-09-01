@@ -352,8 +352,8 @@ static int json_process_connection(json_value *value, connection *c) {
       c->req_body = mstrdup(v);
     } else if (!strcmp(k, "max-requests")) {
       json_check_value(value->u.object.values[i].value, json_integer, "integer expected for max-requests");
-      c->max_reqs = value->u.object.values[i].value->u.integer;
-      if (c->max_reqs < 0) die(EXIT_FAILURE, "max-requests must be >= 0\n", optarg);
+      c->reqs_max = value->u.object.values[i].value->u.integer;
+      if (c->reqs_max < 0) die(EXIT_FAILURE, "max-requests must be >= 0\n", optarg);
     } else if (!strcmp(k, "keep-alive-requests")) {
       json_check_value(value->u.object.values[i].value, json_integer, "integer expected for keep-alive-requests");
       c->keep_alive_reqs = value->u.object.values[i].value->u.integer;
@@ -509,64 +509,64 @@ static int args_parse(struct config *cfg, int argc, char **argv) {
 
   while ((c = getopt_long(argc, argv, "d:i:o:r:s:t:hqv", longopts, NULL)) != -1) {
     switch (c) {
-      case 'd':
-        cfg->duration = strtol(optarg, &p_err, 0);
-        if (p_err == optarg || *p_err) {
-          die(EXIT_FAILURE, "duration: `%s' not an integer\n", optarg);
-        }
-        if (cfg->duration <= 0 || optarg[0] == '-') die(EXIT_FAILURE, "duration must be > 0\n", optarg);
-        break;
+    case 'd':
+      cfg->duration = strtol(optarg, &p_err, 0);
+      if (p_err == optarg || *p_err) {
+        die(EXIT_FAILURE, "duration: `%s' not an integer\n", optarg);
+      }
+      if (cfg->duration <= 0 || optarg[0] == '-') die(EXIT_FAILURE, "duration must be > 0\n", optarg);
+      break;
 
-      case 'i':
-        cfg->file_req = optarg;
-        break;
+    case 'i':
+      cfg->file_req = optarg;
+      break;
 
-      case 'o':
-        cfg->file_resp = optarg;
-        break;
+    case 'o':
+      cfg->file_resp = optarg;
+      break;
 
-      case 'r':
-        cfg->ramp_up = strtol(optarg, &p_err, 0);
-        if (p_err == optarg || *p_err) {
-          die(EXIT_FAILURE, "ramp-up: `%s' not an integer\n", optarg);
-        }
-        if (cfg->ramp_up < 0 || optarg[0] == '-') die(EXIT_FAILURE, "ramp-up must be > 0\n", optarg);
-        break;
+    case 'r':
+      cfg->ramp_up = strtol(optarg, &p_err, 0);
+      if (p_err == optarg || *p_err) {
+        die(EXIT_FAILURE, "ramp-up: `%s' not an integer\n", optarg);
+      }
+      if (cfg->ramp_up < 0 || optarg[0] == '-') die(EXIT_FAILURE, "ramp-up must be > 0\n", optarg);
+      break;
 
-      case 's':
-        cfg->ssl_version = strtol(optarg, &p_err, 0);
-        if (p_err == optarg || *p_err) {
-          die(EXIT_FAILURE, "ssl-version: `%s' not an integer\n", optarg);
-        }
-        if (cfg->ssl_version < 0 || cfg->ssl_version > 4 || optarg[0] == '-') die(EXIT_FAILURE, "ssl-version must be >= 0 and <= 4\n", optarg);
-        break;
+    case 's':
+      cfg->ssl_version = strtol(optarg, &p_err, 0);
+      if (p_err == optarg || *p_err) {
+        die(EXIT_FAILURE, "ssl-version: `%s' not an integer\n", optarg);
+      }
+      if (cfg->ssl_version < 0 || cfg->ssl_version > 4 || optarg[0] == '-') die(EXIT_FAILURE, "ssl-version must be >= 0 and <= 4\n", optarg);
+      break;
 
-      case 't':
-        cfg->threads = strtol(optarg, &p_err, 0);
-        if (p_err == optarg || *p_err) {
-          die(EXIT_FAILURE, "threads: `%s' not an integer\n", optarg);
-        }
-        if (cfg->threads <= 0 || optarg[0] == '-') die(EXIT_FAILURE, "number of threads must be > 0\n", optarg);
-        break;
+    case 't':
+      cfg->threads = strtol(optarg, &p_err, 0);
+      if (p_err == optarg || *p_err) {
+        die(EXIT_FAILURE, "threads: `%s' not an integer\n", optarg);
+      }
+      if (cfg->threads <= 0 || optarg[0] == '-') die(EXIT_FAILURE, "number of threads must be > 0\n", optarg);
+      break;
 
-      case 'h':
-        usage(EXIT_SUCCESS);
-        break;
+    case 'h':
+      usage(EXIT_SUCCESS);
+      break;
 
-      case 'q':
-        merr_suppress(s_info);		/* suppress info messages */
-        break;
+    case 'q':
+      merr_suppress(s_info);		/* suppress info messages */
+      break;
 
-      case 'v':
-        printf(PGNAME" %s [%s]\n", MB_VERSION, aeGetApiName());
-        exit(EXIT_SUCCESS);
-        break;
+    case 'v':
+      printf(PGNAME" %s [%s]\n", MB_VERSION, aeGetApiName());
+      exit(EXIT_SUCCESS);
+      break;
 
-      case '?':
-      case ':':
-      default:
-        usage(EXIT_FAILURE);
-        break;
+    case '?':
+    case ':':
+    default:
+      usage(EXIT_FAILURE);
+      break;
     }
   }
 
