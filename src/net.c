@@ -1,13 +1,14 @@
 #include <errno.h>		/* errno */
 #include <fcntl.h>		/* fnctl() */
-#include <linux/tcp.h>		/* TCP_NODELAY */
 #include <netdb.h>		/* freeaddrinfo() */
+#include <netinet/tcp.h>	/* TCP_NODELAY, TCP_FASTOPEN, ... */
 #include <stdio.h>		/* stdout, stderr, fopen(), fclose() */
 #include <stdlib.h>		/* free() */
 #include <string.h>		/* strlen() */
 #include <sys/ioctl.h>		/* ioctl, FIONREAD */
 #include <sys/socket.h>		/* send/recv(), MSG_NOSIGNAL */
 #include <unistd.h>		/* read(), close() */
+
 #ifdef HAVE_SSL
 #include <wolfssl/ssl.h>	/* WOLFSSL_CTX */
 #endif
@@ -278,6 +279,23 @@ static int tcp_non_block_bind_connect(connection *c) {
       error("unable to setsockopt TCP_NODELAY: %s\n", strerror(errno));
       goto error;
     }
+
+#if 0
+    if (setsockopt(fd, SOL_TCP, TCP_FASTOPEN, &flags, sizeof(flags)) == -1) {
+      error("unable to setsockopt TCP_FASTOPEN: %s\n", strerror(errno));
+      goto error;
+    }
+
+    if (setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &flags, sizeof(flags)) == -1) {
+      error("unable to setsockopt TCP_QUICKACK: %s\n", strerror(errno));
+      goto error;
+    }
+
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &flags, sizeof(flags)) == -1) {
+      error("unable to setsockopt SO_RCVBUF: %s\n", strerror(errno));
+      goto error;
+    }
+#endif
 
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &flags, sizeof(flags)) == -1) {
       error("unable to setsockopt SO_REUSEADDR: %s\n", strerror(errno));
