@@ -1,3 +1,4 @@
+#include <ctype.h>		/* isspace() */
 #include <errno.h>		/* errno */
 #include <fcntl.h>		/* fnctl() */
 #include <netdb.h>		/* freeaddrinfo() */
@@ -25,6 +26,8 @@
 void aeCreateFileEventOrDie(aeEventLoop *, int, int, aeFileProc *, void *);
 static inline char *http_headers_create(connection *, bool);
 void http_request_create(connection *, const char *, char **, size_t *);
+void http_request_create_cc(connection *);
+void http_request_create_ka(connection *);
 int socket_set_nonblock(int);
 static int tcp_non_block_bind_connect(connection *);
 int socket_readable(int);
@@ -67,6 +70,9 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
       headers_len += 4;		/* ': ' + '\r\n' */
     }
   }
+  if (cs_ptr->cookies) {
+    headers_len += 6 + strlen(cs_ptr->cookies) + 4;	/* HTTP_COOKIE + cookie length + separators */
+  }
   if (conn_close) headers_len += 17 + 2;	/* HTTP_CONN_CLOSE + separators */
   if (cs_ptr->req_body) {
     headers_len += 14 + 4 + 20;			/* CONTENT_LENGTH + separators + 64-bit long content length */
@@ -91,6 +97,17 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
       strcpy(headers_ptr, HTTP_EOL);
       headers_ptr += 2;
     }
+  }
+  if (cs_ptr->cookies) {
+    /* Add "Cookie: " header */
+    strcpy(headers_ptr, HTTP_COOKIE);
+    headers_ptr += 6;
+    strcpy(headers_ptr, ": ");
+    headers_ptr += 2;
+    strcpy(headers_ptr, cs_ptr->cookies);
+    headers_ptr += strlen(cs_ptr->cookies);
+    strcpy(headers_ptr, HTTP_EOL);
+    headers_ptr += 2;
   }
   if (conn_close) {
     /* Add "Connection: close" header */
@@ -117,7 +134,7 @@ void http_request_create(connection *c, const char *headers, char **request, siz
 
   snprintf(*request, MAX_REQ_LEN, HTTP_REQUEST,
 	   c->method ? c->method : "GET",
-	   c->path ? c->path : "/1",
+	   c->path ? c->path : "/",
 	   c->host ? c->host : "localhost",
 	   headers? headers: "",
 	   c->req_body ? c->req_body : "");
@@ -125,19 +142,32 @@ void http_request_create(connection *c, const char *headers, char **request, siz
   *length = strlen(*request);
 }
 
-void http_requests_create(connection *c)
+void http_request_create_cc(connection *c)
+{
+  char *headers;
+
+  if (c->request_cclose) free(c->request_cclose);
+
+  headers = http_headers_create(c, 1);
+  http_request_create(c, headers, &c->request_cclose, &c->request_cclose_length);
+  if (headers) free(headers);
+}
+
+void http_request_create_ka(connection *c)
 {
   char *headers;
 
   if (c->request) free(c->request);
-  if (c->request_cclose) free(c->request_cclose);
 
   headers = http_headers_create(c, 0);
   http_request_create(c, headers, &c->request, &c->request_length);
   if (headers) free(headers);
-  headers = http_headers_create(c, 1);
-  http_request_create(c, headers, &c->request_cclose, &c->request_cclose_length);
-  if (headers) free(headers);
+}
+
+void http_requests_create(connection *c)
+{
+  http_request_create_cc(c);
+  http_request_create_ka(c);
 }
 
 void connection_init(connection *c) {
@@ -179,6 +209,7 @@ void connection_init(connection *c) {
   c->written = 0;
   c->read = 0;
   c->status = 0;
+  c->cookies = NULL;
 #ifdef HAVE_SSL
   c->ssl = NULL;
   c->ssl_session = NULL;
@@ -211,10 +242,12 @@ void connections_free(connection *cs) {
       free(cs_ptr->headers);
     }
     if (cs_ptr->req_body) free(cs_ptr->req_body);
-    if (cs_ptr->request) free(cs_ptr->request);
-    if (cs_ptr->request_cclose) free(cs_ptr->request_cclose);
 
 free_dups:
+    if (cs_ptr->request) free(cs_ptr->request);
+    if (cs_ptr->request_cclose) free(cs_ptr->request_cclose);
+    if (cs_ptr->cookies) free(cs_ptr->cookies);
+
 #ifdef HAVE_SSL
     if (cs_ptr->ssl) ssl_free(cs_ptr);
 #endif
@@ -435,6 +468,7 @@ void socket_reconnect(connection *c) {
     aeDeleteFileEvent(c->t->loop, c->fd, AE_READABLE | AE_WRITABLE);
     close(c->fd);
   }
+  free(c->cookies); c->cookies = NULL;
   c->delayed = c->delay_max;
   c->cstats.writeable = 0;
   c->cstats.established = 0;
@@ -534,6 +568,14 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
     return;
   }
   c->conn_close = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
+  if (c->cookies && c->written == 0) {
+    /* we have some cookies => need to re-create HTTP requests */
+    if (c->conn_close) {
+      http_request_create_cc(c);
+    } else {
+      http_request_create_ka(c);
+    }
+  }
   if (c->conn_close) {
     request = c->request_cclose;
     request_len = c->request_cclose_length;
@@ -572,6 +614,7 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
 
     if (c->written == request_len) {
       /* writing done */
+      free(c->cookies); c->cookies = NULL;
       c->message_complete = false;
       c->cstats.reqs++;
       c->cstats.reqs_total++;
@@ -617,7 +660,92 @@ int message_complete(http_parser *parser) {
 }
 
 int header_field(http_parser *parser, const char *at, size_t len) {
-  info("header_field: `%s' (%ld)\n", at, len);
+  connection *c = parser->data;
+  const char *p_at = at;	/* pointer to the current character of the new cookie */
+  const char *p_end;		/* pointer right after the last character of the new cookie header line */
+  const char *p_kvend;		/* pointer right after the last character of the new key=value cookie pair */
+  char *cookies;
+
+  /* a very trivial and naive implementation of session cookies */
+  if (len == 10 && !strncmp(at, "Set-Cookie", 10)) {
+    p_at += 11;
+    p_end = p_at;
+
+    /* find the end of the Set-Cookie header */
+    while (*p_end != '\n' && *p_end != '\r' && *p_end)
+      p_end++;
+
+    while ((p_at < p_end) && isspace(*p_at))
+      p_at++;
+
+    /* find the end of the key-value pair */
+    p_kvend = p_at;
+    while (p_kvend < p_end  && *p_kvend != ';' && *p_kvend != ' ' && *p_kvend != '\t')
+      p_kvend++;
+
+    /* the new cookie is between p_at and p_kvend as `var=value' */
+    if (c->cookies != NULL) {
+      const char *p_eq, *p_old_kvend, *oldcookie = c->cookies;
+      char *newcookie;
+      if ((newcookie = cookies = (char *) calloc(strlen(oldcookie) + p_kvend - p_at + 3, sizeof(char))) == NULL)
+        die(EXIT_FAILURE, "calloc(): cannot allocate memory for HTTP cookies\n"); /* 3: 1 ("\0") + 2 ("; ") */
+
+      p_eq = p_at;
+
+      /* find the equal sign of the key=value pair */
+      while (p_eq < p_kvend && *p_eq != '=')
+        p_eq++;
+
+      if (p_eq == p_kvend) {
+        warning("ignoring a malformed cookie (missing an equal sign): %s\n", p_at);
+        return 1;
+      }
+
+      /* the new cookie name (key) is between p_at and p_eq */
+      while (*oldcookie) {
+        p_old_kvend = oldcookie;
+
+        /* find the end of the old cookie key=value */
+        while (*p_old_kvend != ';' && *p_old_kvend != ' ' && *p_old_kvend)
+          p_old_kvend++;
+
+        /* copy old cookie key=value pairs */
+        if (strncmp(oldcookie, p_at, p_eq - p_at) != 0) {
+          /* key does not match the new key=value pair => copy */
+          if (oldcookie != c->cookies) {
+            /* an old cookie was copied, add "; " separator */
+            strcpy(newcookie, "; ");
+            newcookie += 2;
+          }
+          memcpy(newcookie, oldcookie, p_old_kvend - oldcookie);
+          newcookie += p_old_kvend - oldcookie;
+        }
+
+        /* find the next key=value pair */
+        oldcookie = p_old_kvend;
+        while (*oldcookie && (*oldcookie == ';' || *oldcookie == ' '))
+          oldcookie++;
+      }
+
+      if (oldcookie != c->cookies) {
+        /* an old cookie was copied, add "; " separator */
+        strcpy(newcookie, "; ");
+        newcookie += 2;
+      }
+      memcpy(newcookie, p_at, p_kvend - p_at);
+      newcookie += (p_kvend - p_at);
+      free(c->cookies);
+      c->cookies = cookies;
+    } else {
+      /* until now we haven't had any cookies */
+      if ((cookies = calloc(p_kvend - p_at + 1, sizeof(char))) == NULL)
+        die(EXIT_FAILURE, "calloc(): cannot allocate memory for HTTP cookies\n");
+
+      memcpy(cookies, p_at, p_kvend - p_at);
+      c->cookies = cookies;
+    }
+  }
+
   return 0;
 }
 

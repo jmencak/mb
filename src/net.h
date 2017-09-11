@@ -15,6 +15,7 @@
 
 #define HTTP_EOL	"\r\n"
 #define HTTP_REQUEST	"%s %s HTTP/1.1" HTTP_EOL "Host: %s" HTTP_EOL "User-Agent: " PGNAME "/" MB_VERSION HTTP_EOL "Accept: */*" HTTP_EOL "%s" HTTP_EOL "%s"
+#define HTTP_COOKIE	"Cookie"
 #define HTTP_CONN_CLOSE	"Connection: close"
 #define CONTENT_LENGTH	"Content-Length"
 
@@ -91,6 +92,7 @@ typedef struct connection {
   uint64_t read;		/* how many bytes of response was already read/received (including HTTP headers) */
   http_parser parser;		/* nginx parser */
   int status;			/* HTTP response status */
+  char *cookies;		/* cookies received from and to be sent back to a server */
 #ifdef HAVE_SSL
   WOLFSSL *ssl;			/* SSL object */
   WOLFSSL_SESSION *ssl_session;	/* SSL session cache */

@@ -10,6 +10,7 @@
 #define WATCHDOG_MS	100
 
 #define MB_MAX_CLIENTS	50000	/* maximum number of clients per connections */
+#define MB_CFG_COOKIES	0	/* default usage of cookies */
 #define MB_CFG_DURATION	5	/* default duration [s] */
 #define MB_CFG_THREADS	1	/* default number of threads */
 #define MB_FD_START	128	/* usually start with fd 5, but give us some more room */
@@ -26,6 +27,7 @@ typedef struct statistics {
 
 /* Client options */
 typedef struct config {
+  bool cookies;			/* use session cookies */
   uint64_t duration;		/* duration of the test run [s] */
   char *file_req;		/* input file with individual requests */
   char *file_resp;		/* JMeter-style output file with individual response statistics */
