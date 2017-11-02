@@ -10,7 +10,7 @@ DEP_DIR     := $(PWD)/deps
 CFLAGS      += -Wall -Wno-parentheses -Wno-switch-enum -Wno-unused-value
 LIBS        := -L$(USR_DIR)/lib -lpthread -lm
 VERSION_H   := version.h
-GIT_VERSION := $(shell git rev-parse --short=6 HEAD 2>/dev/null)
+GIT_VERSION := $(shell git describe 2>/dev/null || git rev-parse --short=6 HEAD 2>/dev/null)
 
 ifeq ($(DEBUG),y)
 CFLAGS  += -g
@@ -24,12 +24,6 @@ WOLFSSL_DIR := wolfssl
 WOLFSSL_LIB := $(USR_DIR)/lib/libwolfssl.a
 CFLAGS += -I$(USR_DIR)/include -DHAVE_SNI -DHAVE_SECURE_RENEGOTIATION
 LIBS += -Wl,-Bstatic -lwolfssl -Wl,-Bdynamic
-endif
-
-ifeq ($(GIT_VERSION),)
-VERSION := 0.1.2
-else
-VERSION := $(GIT_VERSION)
 endif
 
 SRC := $(wildcard src/*.c)
@@ -76,7 +70,7 @@ $(LIBJSON_LIB): $(LIBJSON_OBJ)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(VERSION_H):
-	@echo "#define MB_VERSION \"$(VERSION)\"" > $(VERSION_H)
+	@echo "#define MB_VERSION \"$(GIT_VERSION)\"" > $(VERSION_H)
 
 $(BIN): nginx/http_parser.o $(OBJ) libae/libae.a json/libjson.a
 	$(CC) $^ $(LIBS) -o $@
