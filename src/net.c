@@ -240,8 +240,9 @@ int socket_set_nonblock(int fd) {
 
 /* network address and service translation */
 int host_resolve(char *host, int port, struct addrinfo **addr) {
-  char portstr[6];		/* strlen("65535") + 1 */
-  int rc;
+  char portstr[6];              /* strlen("65535") + 1 */
+  int retry = 2;
+  int rc = -1;
   struct addrinfo hints = {
     .ai_family = AF_UNSPEC,
     .ai_socktype = SOCK_STREAM
@@ -252,12 +253,21 @@ int host_resolve(char *host, int port, struct addrinfo **addr) {
 
   /* we have not translated network address and service information for this host yet */
   snprintf(portstr, sizeof(portstr), "%d", port);
-  if ((rc = getaddrinfo(host, portstr, &hints, addr)) != 0) {
-    error("unable to resolve %s:%s: %s\n", host, portstr, gai_strerror(rc));
-    return -1;
+
+  for (; rc != 0 && retry >= 0; retry--) {
+    if ((rc = getaddrinfo(host, portstr, &hints, addr)) != 0) {
+      /* failed to resolve a host */
+      if (retry == 0) {
+        error("unable to resolve %s:%s: %s\n", host, portstr, gai_strerror(rc));
+        return -1;
+      } else {
+        warning("unable to resolve %s:%s: %s, retrying\n", host, portstr, gai_strerror(rc));
+      }
+      usleep(100000);   /* sleep for a while, before re-trying */
+    }
   }
 
-  return 0;
+  return rc;
 }
 
 pthread_mutex_t socket_lock = PTHREAD_MUTEX_INITIALIZER;
