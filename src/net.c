@@ -10,10 +10,6 @@
 #include <sys/socket.h>		/* send/recv(), MSG_NOSIGNAL */
 #include <unistd.h>		/* read(), close() */
 
-#ifdef HAVE_SSL
-#include <wolfssl/ssl.h>	/* WOLFSSL_CTX */
-#endif
-
 #include "mb.h"
 #include "merr.h"
 #include "net.h"

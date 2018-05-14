@@ -7,7 +7,7 @@ BIN         := mb
 PWD         := $(shell pwd)
 USR_DIR	    := $(PWD)/usr
 DEP_DIR     := $(PWD)/deps
-CFLAGS      += -Wall -Wno-parentheses -Wno-switch-enum -Wno-unused-value
+CFLAGS      += -Wall -Wno-parentheses -Wno-switch-enum -Wno-unused-value -Wno-error
 LIBS        := -L$(USR_DIR)/lib -lpthread -lm
 VERSION_H   := version.h
 GIT_VERSION := $(shell git describe 2>/dev/null || git rev-parse --short=6 HEAD 2>/dev/null)
@@ -18,11 +18,11 @@ endif
 
 ifeq ($(SSL_ENABLE),y)
 CFLAGS += -DHAVE_SSL
-WOLFSSL_ARCHIVE := wolfssl-3.9.10.tar.gz
-WOLFSSL_URL := http://www.wolfssl.com/$(WOLFSSL_ARCHIVE)
+WOLFSSL_ARCHIVE := v3.12.2-stable.tar.gz
+WOLFSSL_URL := https://github.com/wolfSSL/wolfssl/archive/$(WOLFSSL_ARCHIVE)
 WOLFSSL_DIR := wolfssl
 WOLFSSL_LIB := $(USR_DIR)/lib/libwolfssl.a
-CFLAGS += -I$(USR_DIR)/include -DHAVE_SNI -DHAVE_SECURE_RENEGOTIATION
+CFLAGS += -I$(USR_DIR)/include
 LIBS += -Wl,-Bstatic -lwolfssl -Wl,-Bdynamic
 endif
 
@@ -48,15 +48,19 @@ $(WOLFSSL_LIB): $(DEP_DIR)/$(WOLFSSL_ARCHIVE)
 	mkdir -p $(WOLFSSL_DIR)
 	tar zxvf $(DEP_DIR)/$(WOLFSSL_ARCHIVE) --strip=1 -C $(WOLFSSL_DIR)
 	(cd $(WOLFSSL_DIR) && \
+	  mkdir -p .git && \
+	  ./autogen.sh && \
 	  ./configure \
-	    --enable-sni \
-	    --enable-static \
-	    --enable-fastmath \
-	    --enable-sslv3 \
 	    --enable-aesni \
+	    --enable-fastmath \
 	    --enable-hugecache \
 	    --enable-intelasm \
+	    --enable-oldtls \
 	    --enable-secure-renegotiation \
+	    --enable-sni \
+	    --enable-sslv3 \
+	    --enable-static \
+	    --enable-tlsv10 \
 	    --enable-truncatedhmac && \
 	  make install prefix=$(USR_DIR))
 

@@ -2,6 +2,7 @@
 #define NET_H
 
 #ifdef HAVE_SSL
+#include <wolfssl/options.h>		/* HAVE_SNI, HAVE_SECURE_RENEGOTIATION, ... */
 #include <wolfssl/ssl.h>		/* WOLFSSL_CTX */
 #endif
 #include <stdbool.h>			/* bool, true, false */

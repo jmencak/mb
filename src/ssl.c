@@ -1,11 +1,10 @@
 #ifdef HAVE_SSL
 
-#include <string.h>	/* strlen() */
-#include <sys/socket.h>	/* MSG_NOSIGNAL */
+#include <string.h>		/* strlen() */
+#include <sys/socket.h>		/* MSG_NOSIGNAL */
 
 #include "merr.h"
 #include "ssl.h"
-#include "wolfssl/options.h"
 
 /* Global variables */
 WOLFSSL_CTX *ctx = NULL;

@@ -1,7 +1,8 @@
 #ifndef SSL_H
 #define SSL_H
 
-#include <wolfssl/ssl.h>			/* WOLFSSL_CTX */
+#include <wolfssl/options.h>	/* HAVE_SNI, HAVE_SECURE_RENEGOTIATION, ... */
+#include <wolfssl/ssl.h>	/* WOLFSSL_CTX */
 
 #include "net.h"
 
