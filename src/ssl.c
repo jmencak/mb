@@ -1,11 +1,10 @@
 #ifdef HAVE_SSL
 
-#include <string.h>	/* strlen() */
-#include <sys/socket.h>	/* MSG_NOSIGNAL */
+#include <string.h>		/* strlen() */
+#include <sys/socket.h>		/* MSG_NOSIGNAL */
 
 #include "merr.h"
 #include "ssl.h"
-#include "wolfssl/options.h"
 
 /* Global variables */
 WOLFSSL_CTX *ctx = NULL;
@@ -156,16 +155,16 @@ ssize_t ssl_read(WOLFSSL *ssl, void *data, int sz) {
 
   if (n < 0) {
     switch (err = wolfSSL_get_error(ssl, n)) {
-      case SSL_ERROR_WANT_READ:
-        /* client would read block */
-        return -1;
+    case SSL_ERROR_WANT_READ:
+      /* client would read block */
+      return -1;
 
-      case SSL_ERROR_ZERO_RETURN:
-        return 0;
+    case SSL_ERROR_ZERO_RETURN:
+      return 0;
 
-      default:
-        error("ssl_read(): %s\n", wolfSSL_ERR_reason_error_string(err));
-        return n;
+    default:
+      error("ssl_read(): %s\n", wolfSSL_ERR_reason_error_string(err));
+      return n;
     }
   }
 
@@ -182,15 +181,15 @@ ssize_t ssl_write(WOLFSSL *ssl, void *data, int sz) {
 
   if (n < 0) {
     switch (err = wolfSSL_get_error(ssl, n)) {
-      case SSL_ERROR_WANT_READ:
-        return -1;
+    case SSL_ERROR_WANT_READ:
+      return -1;
 
-      case SSL_ERROR_WANT_WRITE:
-        return -1;
+    case SSL_ERROR_WANT_WRITE:
+      return -1;
 
-      default:
-        error("ssl_write(): %s\n", wolfSSL_ERR_reason_error_string(err));
-        return n;
+    default:
+      error("ssl_write(): %s\n", wolfSSL_ERR_reason_error_string(err));
+      return n;
     }
   }
 

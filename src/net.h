@@ -2,6 +2,7 @@
 #define NET_H
 
 #ifdef HAVE_SSL
+#include <wolfssl/options.h>		/* HAVE_SNI, HAVE_SECURE_RENEGOTIATION, ... */
 #include <wolfssl/ssl.h>		/* WOLFSSL_CTX */
 #endif
 #include <stdbool.h>			/* bool, true, false */
@@ -15,6 +16,7 @@
 
 #define HTTP_EOL	"\r\n"
 #define HTTP_REQUEST	"%s %s HTTP/1.1" HTTP_EOL "Host: %s" HTTP_EOL "User-Agent: " PGNAME "/" MB_VERSION HTTP_EOL "Accept: */*" HTTP_EOL "%s" HTTP_EOL "%s"
+#define HTTP_COOKIE	"Cookie"
 #define HTTP_CONN_CLOSE	"Connection: close"
 #define CONTENT_LENGTH	"Content-Length"
 
@@ -77,7 +79,7 @@ typedef struct connection {
     uint64_t written_total;	/* total number of bytes written/sent over this connection */
     uint64_t read_total;	/* total number of bytes received over this connection */
   } cstats;
-  uint64_t max_reqs;		/* maximum number of requests to send over this connection (including reconnects) */
+  uint64_t reqs_max;		/* maximum number of requests to send over this connection (including reconnects) */
   uint64_t keep_alive_reqs;	/* maximum number of requests that can be sent over this connection before reconnecting */
   bool tls_session_reuse;	/* enable session resumption to reestablish the connection without a new handshake */
   char *req_body;		/* HTTP request body to send to a server */
@@ -91,6 +93,7 @@ typedef struct connection {
   uint64_t read;		/* how many bytes of response was already read/received (including HTTP headers) */
   http_parser parser;		/* nginx parser */
   int status;			/* HTTP response status */
+  char *cookies;		/* cookies received from and to be sent back to a server */
 #ifdef HAVE_SSL
   WOLFSSL *ssl;			/* SSL object */
   WOLFSSL_SESSION *ssl_session;	/* SSL session cache */

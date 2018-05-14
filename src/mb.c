@@ -34,14 +34,15 @@ static volatile sig_atomic_t run;		/* thread termination variable */
 struct http_parser_settings parser_settings = {
   .on_message_complete	= message_complete,
 #if 0
-  .on_message_begin	= message_begin,
   .on_header_field	= header_field,
   .on_header_value	= header_value,
+  .on_message_begin	= message_begin,
   .on_headers_complete	= headers_complete,
 #endif
 };
 
 static struct option longopts[] = {
+  { "cookies",       no_argument,       NULL, 'c' },
   { "duration",      required_argument, NULL, 'd' },
   { "request-file",  required_argument, NULL, 'i' },
   { "response-file", required_argument, NULL, 'o' },
@@ -84,7 +85,8 @@ static void requests_done();
 static void usage(int ret) {
   fprintf(stderr, "Usage: " PGNAME " <options>\n"
                   "Options:\n"
-                  "  -d, --duration <n>         test duration (including ramp-up) [s]: %d\n"
+                  "  -c, --cookies              use session cookies: %s\n"
+                  "  -d, --duration <n>         test duration (including ramp-up) [s]: %"PRIu64"\n"
                   "  -i, --request-file <s>     input request file\n"
                   "  -o, --response-file <s>    output response stats file\n"
                   "  -q, --quiet                quiet mode\n"
@@ -92,7 +94,7 @@ static void usage(int ret) {
                   "  -s, --ssl-version <n>      SSL version: auto(0), SSLv3(1) - TLS1.2(4) [%d]\n"
                   "  -t, --threads <n>          number of worker threads: %"PRIu64"\n"
                   "  -v, --version              print version details\n"
-                  "\n", MB_CFG_DURATION, cfg.ramp_up, MB_TLS_VERSION, cfg.threads
+                  "\n", cfg.cookies? "yes" : "no", cfg.duration, cfg.ramp_up, MB_TLS_VERSION, cfg.threads
           );
 
   if (ret >= 0) exit(ret);
@@ -352,8 +354,8 @@ static int json_process_connection(json_value *value, connection *c) {
       c->req_body = mstrdup(v);
     } else if (!strcmp(k, "max-requests")) {
       json_check_value(value->u.object.values[i].value, json_integer, "integer expected for max-requests");
-      c->max_reqs = value->u.object.values[i].value->u.integer;
-      if (c->max_reqs < 0) die(EXIT_FAILURE, "max-requests must be >= 0\n", optarg);
+      c->reqs_max = value->u.object.values[i].value->u.integer;
+      if (c->reqs_max < 0) die(EXIT_FAILURE, "max-requests must be >= 0\n", optarg);
     } else if (!strcmp(k, "keep-alive-requests")) {
       json_check_value(value->u.object.values[i].value, json_integer, "integer expected for keep-alive-requests");
       c->keep_alive_reqs = value->u.object.values[i].value->u.integer;
@@ -405,6 +407,7 @@ static int json_process_connections(json_value *value) {
   int i, j;
   int length, ret, connections;
   connection *c = cs;
+  connection *cs_ptr;
 
   if (value == NULL)
     return 0;
@@ -429,8 +432,12 @@ static int json_process_connections(json_value *value) {
       /* copy the connection data to the uninitialised connections that follow */
       c = cs + offset;
       for (j = 1; j < ret; j++) {
-        memcpy(c + j, c, sizeof(connection));
-        (c + j)->duplicate = true;	/* do not free any data structures on this connection */
+        cs_ptr = c + j;
+        memcpy(cs_ptr, c, sizeof(connection));
+        cs_ptr->request = NULL;		/* shallow copy, prevent `free's when calling http_requests_create() */
+        cs_ptr->request_cclose = NULL;	/* shallow copy, prevent `free's when calling http_requests_create() */
+        http_requests_create(cs_ptr);	/* prepare HTTP data to send over a socket */
+        cs_ptr->duplicate = true;	/* do not free any data structures on this connection */
       }
       c = cs + offset + ret;
       continue;
@@ -500,6 +507,7 @@ static int args_parse(struct config *cfg, int argc, char **argv) {
   int c;
   char *p_err;
 
+  cfg->cookies = MB_CFG_COOKIES;	/* default usage of cookies */
   cfg->duration = MB_CFG_DURATION;	/* default duration */
   cfg->file_req = NULL;
   cfg->file_resp = NULL;
@@ -507,67 +515,76 @@ static int args_parse(struct config *cfg, int argc, char **argv) {
   cfg->ssl_version = MB_TLS_VERSION;
   cfg->ssl = false;
 
-  while ((c = getopt_long(argc, argv, "d:i:o:r:s:t:hqv", longopts, NULL)) != -1) {
+  while ((c = getopt_long(argc, argv, "cd:i:o:r:s:t:hqv", longopts, NULL)) != -1) {
     switch (c) {
-      case 'd':
-        cfg->duration = strtol(optarg, &p_err, 0);
-        if (p_err == optarg || *p_err) {
-          die(EXIT_FAILURE, "duration: `%s' not an integer\n", optarg);
-        }
-        if (cfg->duration <= 0 || optarg[0] == '-') die(EXIT_FAILURE, "duration must be > 0\n", optarg);
-        break;
+    case 'c':
+      cfg->cookies = true;
+      break;
 
-      case 'i':
-        cfg->file_req = optarg;
-        break;
+    case 'd':
+      cfg->duration = strtol(optarg, &p_err, 0);
+      if (p_err == optarg || *p_err) {
+        die(EXIT_FAILURE, "duration: `%s' not an integer\n", optarg);
+      }
+      if (cfg->duration <= 0 || optarg[0] == '-') die(EXIT_FAILURE, "duration must be > 0\n", optarg);
+      break;
 
-      case 'o':
-        cfg->file_resp = optarg;
-        break;
+    case 'i':
+      cfg->file_req = optarg;
+      break;
 
-      case 'r':
-        cfg->ramp_up = strtol(optarg, &p_err, 0);
-        if (p_err == optarg || *p_err) {
-          die(EXIT_FAILURE, "ramp-up: `%s' not an integer\n", optarg);
-        }
-        if (cfg->ramp_up < 0 || optarg[0] == '-') die(EXIT_FAILURE, "ramp-up must be > 0\n", optarg);
-        break;
+    case 'o':
+      cfg->file_resp = optarg;
+      break;
 
-      case 's':
-        cfg->ssl_version = strtol(optarg, &p_err, 0);
-        if (p_err == optarg || *p_err) {
-          die(EXIT_FAILURE, "ssl-version: `%s' not an integer\n", optarg);
-        }
-        if (cfg->ssl_version < 0 || cfg->ssl_version > 4 || optarg[0] == '-') die(EXIT_FAILURE, "ssl-version must be >= 0 and <= 4\n", optarg);
-        break;
+    case 'r':
+      cfg->ramp_up = strtol(optarg, &p_err, 0);
+      if (p_err == optarg || *p_err) {
+        die(EXIT_FAILURE, "ramp-up: `%s' not an integer\n", optarg);
+      }
+      if (cfg->ramp_up < 0 || optarg[0] == '-') die(EXIT_FAILURE, "ramp-up must be > 0\n", optarg);
+      break;
 
-      case 't':
-        cfg->threads = strtol(optarg, &p_err, 0);
-        if (p_err == optarg || *p_err) {
-          die(EXIT_FAILURE, "threads: `%s' not an integer\n", optarg);
-        }
-        if (cfg->threads <= 0 || optarg[0] == '-') die(EXIT_FAILURE, "number of threads must be > 0\n", optarg);
-        break;
+    case 's':
+      cfg->ssl_version = strtol(optarg, &p_err, 0);
+      if (p_err == optarg || *p_err) {
+        die(EXIT_FAILURE, "ssl-version: `%s' not an integer\n", optarg);
+      }
+      if (cfg->ssl_version < 0 || cfg->ssl_version > 4 || optarg[0] == '-') die(EXIT_FAILURE, "ssl-version must be >= 0 and <= 4\n", optarg);
+      break;
 
-      case 'h':
-        usage(EXIT_SUCCESS);
-        break;
+    case 't':
+      cfg->threads = strtol(optarg, &p_err, 0);
+      if (p_err == optarg || *p_err) {
+        die(EXIT_FAILURE, "threads: `%s' not an integer\n", optarg);
+      }
+      if (cfg->threads <= 0 || optarg[0] == '-') die(EXIT_FAILURE, "number of threads must be > 0\n", optarg);
+      break;
 
-      case 'q':
-        merr_suppress(s_info);		/* suppress info messages */
-        break;
+    case 'h':
+      usage(EXIT_SUCCESS);
+      break;
 
-      case 'v':
-        printf(PGNAME" %s [%s]\n", MB_VERSION, aeGetApiName());
-        exit(EXIT_SUCCESS);
-        break;
+    case 'q':
+      merr_suppress(s_info);		/* suppress info messages */
+      break;
 
-      case '?':
-      case ':':
-      default:
-        usage(EXIT_FAILURE);
-        break;
+    case 'v':
+      printf(PGNAME" %s [%s]\n", MB_VERSION, aeGetApiName());
+      exit(EXIT_SUCCESS);
+      break;
+
+    case '?':
+    case ':':
+    default:
+      usage(EXIT_FAILURE);
+      break;
     }
+  }
+
+  if (cfg->cookies) {
+    /* Parsing headers is expensive, turn it on only when needed. */
+    parser_settings.on_header_field = header_field;
   }
 
   if (cfg->ramp_up >= cfg->duration) {
