@@ -97,9 +97,6 @@ WOLFSSL *ssl_new(connection *c) {
   }
   wolfSSL_SNI_SetOptions(c->ssl, WOLFSSL_SNI_HOST_NAME, WOLFSSL_SNI_CONTINUE_ON_MISMATCH);
 
-  if (wolfSSL_UseSecureRenegotiation(c->ssl) != SSL_SUCCESS)
-    error("can't enable secure renegotiation: [%d]\n", c->fd);
-
   /* do not call ssl_connect()/wolfSSL_connect(), leave that up to wolfSSL_write() when needed */
 
   return c->ssl;
@@ -108,7 +105,7 @@ WOLFSSL *ssl_new(connection *c) {
 int ssl_free(connection *c) {
   if (!c || !c->ssl) return 0;
 
-  if (c->ssl && c->tls_session_reuse && !c->ssl_session) {
+  if (c->tls_session_reuse) {
     /* set up TLS session reuse */
     c->ssl_session = wolfSSL_get_session(c->ssl);
     /* note that it is possible for c->ssl_session == NULL */

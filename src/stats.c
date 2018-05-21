@@ -1,6 +1,11 @@
 #include <inttypes.h>	/* PRIu64 */
 #include <pthread.h>	/* pthread_mutex_lock() */
 
+#ifdef HAVE_SSL
+#include <wolfssl/options.h>	/* HAVE_SNI, HAVE_SECURE_RENEGOTIATION, ... */
+#include <wolfssl/ssl.h>	/* wolfSSL_session_reused() */
+#endif
+
 #include "mb.h"		/* time_us() */
 #include "net.h"	/* connection struct */
 #include "stats.h"
@@ -24,24 +29,29 @@ int write_stats_line(FILE *fd, connection *c, char *err) {
     delay = now - c->cstats.established;
   }
 
-  int len = snprintf(s, BUFSIZ, "%"PRIu64",%"PRIu64",%d,%"PRIu64",%"PRIu64",%s %s://%s:%d%s,%d,%d,%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%s\n",
+  int len = snprintf(s, BUFSIZ, "%"PRIu64",%"PRIu64",%d,%"PRIu64",%"PRIu64",%s %s://%s:%d%s,%d,%d,%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%"PRIu64",%d,%s\n",
     start_request,
     delay,
-    c->status,				/* HTTP response status */
-    c->written,				/* request length (including headers) */
-    c->read,				/* response length (including headers) */
-    c->method,				/* http|https */
+    c->status,					/* HTTP response status */
+    c->written,					/* request length (including headers) */
+    c->read,					/* response length (including headers) */
+    c->method,					/* http|https */
     (c->scheme == http)? "http": "https",
     c->host,
     c->port,
     c->path,
-    c->t->id,				/* thread id */
-    c->fd,				/* connection id (file descriptor) */
-    c->cstats.connections,		/* how many times we connected (initial connection + reconnections) */
-    c->cstats.reqs,			/* number of requests sent since the last (re-)connection */
-    c->cstats.start,			/* time [us] since the Epoch we *first tried* to establish this connection */
-    socket_writeable,			/* time [us] it took for the socket to become writeable */
-    connection_establishment,		/* time [us] it took to establish this connection (connection establishment delay) */
+    c->t->id,					/* thread id */
+    c->fd,					/* connection id (file descriptor) */
+    c->cstats.connections,			/* how many times we connected (initial connection + reconnections) */
+    c->cstats.reqs,				/* number of requests sent since the last (re-)connection */
+    c->cstats.start,				/* time [us] since the Epoch we *first tried* to establish this connection */
+    socket_writeable,				/* time [us] it took for the socket to become writeable */
+    connection_establishment,			/* time [us] it took to establish this connection (connection establishment delay) */
+#ifdef HAVE_SSL
+    c->ssl? wolfSSL_session_reused(c->ssl): 0,	/* TLS session: 1 -- reused, 0 -- not reused */
+#else
+    0,
+#endif
     err? err: ""
     );
 
