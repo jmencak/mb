@@ -125,7 +125,7 @@ Note that all of the above are *optional*, apart from the target **host**.
 The optional request-response output CSV file has the following format:
 
 ```
-start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_id(7),conn_id(8),conns(9),reqs(10),start(11),socket_writable(12),conn_est(13),err(14)
+start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_id(7),conn_id(8),conns(9),reqs(10),start(11),socket_writable(12),conn_est(13),tls_reuse(14),err(15)
 ```
 
 * **start_request**: start of the request since the Epoch in microseconds.  For a HTTP 
@@ -162,6 +162,7 @@ start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_
   same for all HTTP keep-alive requests within a connection.  Also, for plain 
   HTTP requests this delay is equal to the **socket_writable** 
   value.  For TLS connections, the delay is increased by the TLS handshake.
+* **tls_reuse**: TLS session reused: [0|1].
 * **err**: an optional error message in case of a failure
 
 
