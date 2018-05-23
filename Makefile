@@ -57,6 +57,7 @@ $(WOLFSSL_LIB): $(DEP_DIR)/$(WOLFSSL_ARCHIVE)
 	    --enable-intelasm \
 	    --enable-oldtls \
 	    --enable-secure-renegotiation \
+	    --enable-session-ticket \
 	    --enable-sni \
 	    --enable-sslv3 \
 	    --enable-static \
