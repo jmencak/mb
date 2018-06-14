@@ -12,13 +12,17 @@
 #include "../nginx/http_parser.h"	/* http_parser */
 
 #define RECVBUF		8192
-#define MAX_REQ_LEN	4096		/* maximum number of characters to send to a server */
+#define MAX_REQ_LEN	2<<21		/* maximum number of characters to send to a server: 4M */
 
-#define HTTP_EOL	"\r\n"
-#define HTTP_REQUEST	"%s %s HTTP/1.1" HTTP_EOL "Host: %s" HTTP_EOL "User-Agent: " PGNAME "/" MB_VERSION HTTP_EOL "Accept: */*" HTTP_EOL "%s" HTTP_EOL "%s"
+#define HTTP_CRLF	"\r\n"
+#define HTTP_PROTO	"HTTP/1.1"
+#define HTTP_HOST	"Host"
+#define HTTP_USER_AGENT	"User-Agent: " PGNAME "/" MB_VERSION
+#define HTTP_ACCEPT	"Accept: */*"
 #define HTTP_COOKIE	"Cookie"
 #define HTTP_CONN_CLOSE	"Connection: close"
-#define CONTENT_LENGTH	"Content-Length"
+#define HTTP_CONT_LEN	"Content-Length"
+#define HTTP_CONT_MAX	20		/* generous 64-bit long content length maximum */
 
 #define SOCK_READ(fd, buf, len)		recv(fd, buf, len, MSG_NOSIGNAL)
 #define SOCK_WRITE(fd, buf, len)	send(fd, buf, len, MSG_NOSIGNAL)

@@ -51,6 +51,10 @@ void aeCreateFileEventOrDie(aeEventLoop *eventLoop, int fd, int mask,
   }
 }
 
+/*
+ * Create HTTP headers
+ * Note: this function has a side effect of trimming request body, when content length is too large.
+ */
 static inline char *http_headers_create(connection *c, bool conn_close) {
   connection *cs_ptr = c;
   size_t headers_len = 0;
@@ -58,6 +62,11 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
   char *headers_ptr;
 
   /* calculate headers length */
+  headers_len += strlen(c->method ? c->method : "GET") + 1 + strlen(c->path ? c->path : "/") + 1 + strlen(HTTP_PROTO) + 2;	/* + 2x spaces + HTTP_CRLF */
+  headers_len += strlen(HTTP_HOST) + 2 + strlen(c->host ? c->host : "localhost") + 2;	/* + ': ' + HTTP_CRLF */
+  headers_len += strlen(HTTP_USER_AGENT) + 2;		/* + HTTP_CRLF */
+  headers_len += strlen(HTTP_ACCEPT) + 2;		/* + HTTP_CRLF */
+
   if (cs_ptr->headers) {
     key_value *kv;
     for (kv = c->headers; kv->key; kv++) {
@@ -69,9 +78,9 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
   if (cs_ptr->cookies) {
     headers_len += 6 + strlen(cs_ptr->cookies) + 4;	/* HTTP_COOKIE + cookie length + separators */
   }
-  if (conn_close) headers_len += 17 + 2;	/* HTTP_CONN_CLOSE + separators */
+  if (conn_close) headers_len += 17 + 2;		/* HTTP_CONN_CLOSE + separators */
   if (cs_ptr->req_body) {
-    headers_len += 14 + 4 + 20;			/* CONTENT_LENGTH + separators + 64-bit long content length */
+    headers_len += 14 + 4 + HTTP_CONT_MAX;		/* HTTP_CONT_LEN + separators + HTTP_CONT_MAX */
   }
 
   if ((headers = calloc(headers_len + 1, sizeof(char))) == NULL)
@@ -79,6 +88,15 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
 
   /* fill in the headers string */
   headers_ptr = headers;
+  headers_ptr += sprintf(headers_ptr,
+           "%s %s " HTTP_PROTO HTTP_CRLF
+           HTTP_HOST ": %s" HTTP_CRLF
+           HTTP_USER_AGENT HTTP_CRLF
+           HTTP_ACCEPT HTTP_CRLF,
+           c->method ? c->method : "GET",
+           c->path ? c->path : "/",
+           c->host ? c->host : "localhost");
+
   if (cs_ptr->headers) {
     key_value *kv;
     for (kv = c->headers; kv->key; kv++) {
@@ -90,7 +108,7 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
         strcpy(headers_ptr, kv->value);
         headers_ptr += strlen(kv->value);
       }
-      strcpy(headers_ptr, HTTP_EOL);
+      strcpy(headers_ptr, HTTP_CRLF);
       headers_ptr += 2;
     }
   }
@@ -102,20 +120,26 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
     headers_ptr += 2;
     strcpy(headers_ptr, cs_ptr->cookies);
     headers_ptr += strlen(cs_ptr->cookies);
-    strcpy(headers_ptr, HTTP_EOL);
+    strcpy(headers_ptr, HTTP_CRLF);
     headers_ptr += 2;
   }
   if (conn_close) {
     /* Add "Connection: close" header */
-    strcpy(headers_ptr, HTTP_CONN_CLOSE HTTP_EOL);
+    strcpy(headers_ptr, HTTP_CONN_CLOSE HTTP_CRLF);
     headers_ptr += 17 + 2;	/* HTTP_CONN_CLOSE + separators */
   }
+
   if (cs_ptr->req_body) {
     /* Add Content-Length header */
     size_t content_len = strlen(cs_ptr->req_body);
-    strcpy(headers_ptr, CONTENT_LENGTH);
-    headers_ptr += strlen(CONTENT_LENGTH);
-    sprintf(headers_ptr, ": %lu" HTTP_EOL, content_len);
+    strcpy(headers_ptr, HTTP_CONT_LEN);
+    headers_ptr += strlen(HTTP_CONT_LEN);
+    if (headers_len + 2 + content_len > MAX_REQ_LEN) {
+      warning("content length too large (%ld), trimming; consider increasing MAX_REQ_LEN (%ld)\n", content_len, MAX_REQ_LEN);
+      content_len = MAX_REQ_LEN - headers_len - 2;
+      cs_ptr->req_body[content_len] = 0;
+    }
+    sprintf(headers_ptr, ": %lu" HTTP_CRLF, content_len);
   }
 
   return headers;
@@ -123,17 +147,15 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
 
 void http_request_create(connection *c, const char *headers, char **request, size_t *length)
 {
-  if ((*request = malloc(MAX_REQ_LEN + 1)) == NULL) {
+  size_t request_len = strlen(headers) + 2 + (c->req_body? strlen(c->req_body): 0) + 1;	/* + HTTP_CRLF + '\0' */
+  if ((*request = malloc(request_len + 1)) == NULL) {
     fprintf(stderr, "malloc(): cannot allocate memory for HTTP request\n");
     exit(EXIT_FAILURE);
   }
 
-  snprintf(*request, MAX_REQ_LEN, HTTP_REQUEST,
-	   c->method ? c->method : "GET",
-	   c->path ? c->path : "/",
-	   c->host ? c->host : "localhost",
-	   headers? headers: "",
-	   c->req_body ? c->req_body : "");
+  snprintf(*request, request_len, "%s" HTTP_CRLF "%s",
+           headers? headers: "",
+           c->req_body ? c->req_body : "");
 
   *length = strlen(*request);
 }
