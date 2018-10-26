@@ -89,7 +89,11 @@ typedef struct connection {
   char *req_body;		/* HTTP request body to send to a server */
   char *request;		/* HTTP request data (headers & body combined) to send to a server (keep-alive) */
   char *request_cclose;		/* HTTP request data (headers & body combined) to send to a server ("Connection: close") */
-  bool conn_close;		/* Is the current request built as "Connection: close" request? */
+  bool close_client;		/* Should the client initiate connection close? */
+  bool close_linger;		/* Enable socket lingering? */
+  uint64_t close_linger_sec;	/* how many seconds to linger for */
+  bool cclose;			/* Should the client close connection upon receiving response? */
+  bool header_cclose;		/* Is the current request built as "Connection: close" request? */
   size_t request_length;	/* HTTP request data (headers & body combined) to send to a server length (keep-alive) */
   size_t request_cclose_length;	/* HTTP request data (headers & body combined) to send to a server length ("Connection: close") */
   bool message_complete;	/* Do we have a complete HTTP response on this connection? */

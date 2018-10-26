@@ -93,6 +93,10 @@ where the individual `<request>`s are
          "min": <n>,
          "max": <n>
        },
+      "close": {
+         "client": <b>,
+         "linger": <n>
+       },
       "ramp-up": <n>
     }
 
@@ -116,6 +120,13 @@ where the individual `<request>`s are
   concurrent client requests as the TCP connections do not block.
 * **delay**: random delay between requests in milliseconds.  The random delay is between **min** 
   and **max**.
+* **close**: Options in this section are *experimental*.
+  * **client**: Client/Server-side close.  If the value is "false" or unspecified, "Connection: close" header will be
+    sent to the target host after reaching **keep-alive-requests** requests and the target host will be expected to close
+    the TCP connection first.  If the value is "true", the mb client will close the TCP connection after reaching 
+    **keep-alive-requests** requests.
+  * **linger**: How many seconds to linger for.  Set to 0 to to cause TCP connection abort on close(), and send a RST 
+    to the target host.
 * **ramp-up**: time in seconds to "ramp up" to the **delay** above (per-thread slow start)
 
 Note that all of the above are *optional*, apart from the target **host**.
@@ -155,7 +166,7 @@ start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_
   this connection.  Note that this time is equal for all HTTP keep-alive requests
   for this connection (if any).
 * **socket_writable**: time in microseconds it took for the socket to become 
-  writeable (since **start**).  Note that this time the same for all HTTP 
+  writeable (since **start**).  Note that this time is the same for all HTTP 
   keep-alive requests within a connection.
 * **conn_est**: time in microseconds it took to establish this connection (since
   **start**).  Note that this connection establishment delay is the 

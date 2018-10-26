@@ -69,6 +69,7 @@ void sig_int_term(int);
 void signals_set();
 static void json_check_value(json_value *, json_type, const char *);
 static void json_process_connection_delay(json_value *, connection *);
+static void json_process_connection_close(json_value *, connection *);
 static void json_process_connection_headers(json_value *, connection *);
 static int json_process_connection(json_value *, connection *);
 static int json_process_connections(json_value *);
@@ -260,6 +261,28 @@ static void json_process_connection_delay(json_value *value, connection *c) {
   }
 }
 
+static void json_process_connection_close(json_value *value, connection *c) {
+  int length, i;
+
+  if (value == NULL)
+    return;
+
+  length = value->u.object.length;
+  for (i = 0; i < length; i++) {
+    const char *k = value->u.object.values[i].name;
+    if (!strcmp(k, "client")) {
+      json_check_value(value->u.object.values[i].value, json_boolean, "boolean expected for close_client");
+      c->close_client = value->u.object.values[i].value->u.boolean;
+    } else if (!strcmp(k, "linger")) {
+      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for close_linger");
+      c->close_linger = true;
+      c->close_linger_sec = value->u.object.values[i].value->u.integer;
+    } else {
+      die(EXIT_FAILURE, "invalid input request file, key %s\n", k);
+    }
+  }
+}
+
 static void json_process_connection_headers(json_value *value, connection *c) {
   int length, i;
 
@@ -304,6 +327,16 @@ static int json_process_connection(json_value *value, connection *c) {
         json_process_connection_delay(value->u.object.values[i].value, c);
       else
         die(EXIT_FAILURE, "invalid input request file, delay not an object\n");
+
+      continue;
+    }
+
+    if (!strcmp(k, "close")) {
+      /* close_client/linger */
+      if (value->u.object.values[i].value->type == json_object)
+        json_process_connection_close(value->u.object.values[i].value, c);
+      else
+        die(EXIT_FAILURE, "invalid input request file, close not an object\n");
 
       continue;
     }

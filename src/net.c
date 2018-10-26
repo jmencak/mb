@@ -220,7 +220,11 @@ void connection_init(connection *c) {
   c->req_body = NULL;
   c->request = NULL;
   c->request_cclose = NULL;
-  c->conn_close = false;
+  c->close_client = false;
+  c->close_linger = false;
+  c->close_linger_sec = 0;
+  c->cclose = false;
+  c->header_cclose = false;
   c->request_length = 0;
   c->request_cclose_length = 0;
   c->message_complete = false;
@@ -358,6 +362,16 @@ static int tcp_non_block_bind_connect(connection *c) {
     }
 #endif
 
+    if (c->close_linger) {
+      struct linger l;
+      l.l_onoff = 1;
+      l.l_linger = c->close_linger_sec;
+      if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l)) == -1) {
+        error("unable to setsockopt SO_LINGER: %s\n", strerror(errno));
+        goto error;
+      }
+    }
+
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &flags, sizeof(flags)) == -1) {
       error("unable to setsockopt SO_REUSEADDR: %s\n", strerror(errno));
       goto error;
@@ -494,7 +508,9 @@ void socket_reconnect(connection *c) {
 #endif
   if (c->fd != -1) {
     aeDeleteFileEvent(c->t->loop, c->fd, AE_READABLE | AE_WRITABLE);
-    close(c->fd);
+    if (close(c->fd) == -1) {
+      error("socket_reconnect() failed: %s: [%d]\n", strerror(errno), c->fd);
+    }
   }
   free(c->cookies); c->cookies = NULL;
   c->delayed = c->delay_max;
@@ -516,7 +532,7 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
 
     if (n < 0) {
       if (errno == EAGAIN) {
-        if (c->conn_close) {
+        if (c->header_cclose) {
           /* Request with "Connection: close" header. */
           return;
         }
@@ -549,7 +565,7 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
     }
   } while (n != 0);
 
-  if (c->conn_close || !http_should_keep_alive(&c->parser)) {
+  if (c->header_cclose || !http_should_keep_alive(&c->parser)) {
     goto reconnect;
   }
   /* we have a HTTP keep-alive connection */
@@ -557,6 +573,10 @@ void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
   if (!c->message_complete) {
     /* HTTP response is not yet fully retrieved */
     return;
+  }
+  if (c->cclose) {
+    /* we have a complete response and closing the connection from the client side */
+    goto reconnect;
   }
   /* we have a complete response and continue with HTTP keep-alive requests on the current connection */
   c->read = 0;
@@ -581,6 +601,7 @@ reconnect:
 void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
   ssize_t n;
   connection *c = data;
+  bool cclose = false;
   uint64_t now_writable;
   size_t request_len, write_len;
   char *request;
@@ -595,16 +616,23 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
     if (requests_max_cb) requests_max_cb();
     return;
   }
-  c->conn_close = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
+  cclose = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
+  if (c->close_client) {
+    /* always keep-alive connections, close from the client side (c->header_cclose == false) */
+    c->cclose = cclose;
+  } else {
+    /* once we have the last request, ask the server to close the connection by "Connection: close" (c->header_cclose == true) */
+    c->header_cclose = cclose;
+  }
   if (c->cookies && c->written == 0) {
     /* we have some cookies => need to re-create HTTP requests */
-    if (c->conn_close) {
+    if (c->header_cclose) {
       http_request_create_cc(c);
     } else {
       http_request_create_ka(c);
     }
   }
-  if (c->conn_close) {
+  if (c->header_cclose) {
     request = c->request_cclose;
     request_len = c->request_cclose_length;
   } else {
