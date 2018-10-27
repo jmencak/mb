@@ -83,3 +83,19 @@ void info(const char *fmt, ...) {
 
   va_end(ap);
 }
+
+void dbg(const char *fmt, ...) {
+  va_list ap;
+  struct timeval tv;
+  gettimeofday(&tv,NULL);
+
+  va_start(ap, fmt);
+
+  pthread_mutex_lock(&stderr_lock);
+  fprintf(stderr, "%ld.%ld: ", tv.tv_sec, tv.tv_usec);
+  fputs("dbg: ", stderr);
+  vfprintf(stderr, fmt, ap);
+  pthread_mutex_unlock(&stderr_lock);
+
+  va_end(ap);
+}

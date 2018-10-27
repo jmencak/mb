@@ -105,7 +105,7 @@ static inline char *mstrdup(const char *s) {
   char *ret = NULL;
 
   if ((ret = strdup(s)) == NULL) {
-    die(EXIT_FAILURE, "strdup(): unable to allocate %d bytes: %s\n", strlen(s), strerror(errno));
+    die(EXIT_FAILURE, "strdup(): unable to allocate %d bytes: %s (%d)\n", strlen(s), strerror(errno), errno);
   }
 
   return ret;
@@ -222,10 +222,10 @@ void signals_set() {
   act.sa_handler = &sig_int_term;
 
   if (sigaction(SIGTERM, &act, NULL) < 0)
-    error("sigaction(): %s\n", strerror(errno));
+    error("sigaction(): %s (%d)\n", strerror(errno), errno);
 
   if (sigaction(SIGINT, &act, NULL) < 0)
-    error("sigaction(): %s\n", strerror(errno));
+    error("sigaction(): %s (%d)\n", strerror(errno), errno);
 }
 
 static void json_check_value(json_value *value, json_type type, const char *err) {
@@ -460,7 +460,7 @@ static int json_process_connections(json_value *value) {
       connections += ret - 1;
       /* we have more than one client/connection per a given request */
       if ((cs = realloc(cs, (connections + 1) * sizeof(connection))) == NULL) {
-        die(EXIT_FAILURE, "realloc() failed: %s\n", strerror(errno));
+        die(EXIT_FAILURE, "realloc() failed: %s (%d)\n", strerror(errno), errno);
       }
       /* copy the connection data to the uninitialised connections that follow */
       c = cs + offset;
@@ -665,7 +665,7 @@ void *thread_main(void *arg) {
   t->loop = aeCreateEventLoop(connections + cfg.threads + MB_FD_START);
   time_event_id = aeCreateTimeEvent(t->loop, WATCHDOG_MS, watchdog, NULL, NULL);
   if (time_event_id == AE_ERR) {
-    die(EXIT_FAILURE, "cannot create time event: %s\n", strerror(errno));
+    die(EXIT_FAILURE, "cannot create time event: %s (%d)\n", strerror(errno), errno);
   }
 
   /* register socket connect callback */
@@ -723,7 +723,7 @@ void threads_start() {
     t->id = i;
     r = pthread_create(&t->thread, &attr, thread_main, (void *)t);
     if (r) {
-      die(EXIT_FAILURE, "unable to create thread %d: %s\n", i, strerror(errno));
+      die(EXIT_FAILURE, "unable to create thread %d: %s (%d)\n", i, strerror(errno), errno);
     }
     if (thread_delay && (i + 1) < cfg.threads) usleep(thread_delay);
   }

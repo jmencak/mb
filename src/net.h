@@ -12,6 +12,7 @@
 #include "../nginx/http_parser.h"	/* http_parser */
 
 #define RECVBUF		8192
+#define SNDBUF		8192
 #define MAX_REQ_LEN	2<<21		/* maximum number of characters to send to a server: 4M */
 
 #define HTTP_CRLF	"\r\n"
@@ -31,7 +32,7 @@
 #ifdef HAVE_SSL
 #define CONN_READ(c, len)	((c->scheme == https)? ssl_read(c->ssl, c->t->buf, len): SOCK_READ(c->fd, c->t->buf, len))
 #define CONN_WRITE(c, buf, len)	((c->scheme == https)? ssl_write(c->ssl, buf, len): SOCK_WRITE(c->fd, buf, len))
-#define CONN_READABLE(c)	((c->scheme == https)? ssl_readable(c->fd): SOCK_READABLE(c->fd))
+#define CONN_READABLE(c)	((c->scheme == https)? ssl_readable(c): SOCK_READABLE(c->fd))
 #else
 #define CONN_READ(c, len)	SOCK_READ(c->fd, c->t->buf, len)
 #define CONN_WRITE(c, buf, len)	SOCK_WRITE(c->fd, buf, len)
