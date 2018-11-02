@@ -65,6 +65,14 @@ typedef struct connection {
   int port;			/* target port */
   struct addrinfo *addr_from;	/* translated network address and service information for host_from */
   struct addrinfo *addr_to;	/* translated network address and service information for host/port */
+  struct {
+    struct {
+      bool enable;		/* enable TCP keep-alive */
+      int idle;			/* # of seconds a connection needs to be idle before TCP begins sending probes */
+      int intvl;		/* the number of seconds between TCP keep-alive probes */
+      int cnt;			/* the maximum number of TCP keep-alive probes to send */
+    } keep_alive;
+  } tcp;
   char *method;			/* method: (GET, HEAD, POST, PUT, DELETE, ...) */
   char *path;			/* URL path */
   key_value *headers;		/* key/value header pairs */

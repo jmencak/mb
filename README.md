@@ -1,7 +1,7 @@
 # mb: Multiple-host HTTP(s) Benchmarking tool
 
 The [mb](https://github.com/jmencak/mb)
-client aims to be a clean, simple and scalable tool to generate 
+client aims to be a clean, simple and scalable tool to generate
 significant HTTP(s) load against multiple targets from a single host.  It
 also has a per-target reporting functionality.  Similarly to Will Glozer's
 [fantastic tool](https://github.com/wg/wrk)
@@ -73,10 +73,18 @@ where the individual `<request>`s are
 
     {
       "host_from": <s>,
-      "scheme": <s>,
-      "tls-session-reuse": <b>
       "host": <s>,
       "port": <n>,
+      "tcp": {
+        "keep-alive": {
+          "enable": <b>,
+          "idle": <n>,
+          "intvl": <n>,
+          "cnt": <n>
+        }
+      },
+      "scheme": <s>,
+      "tls-session-reuse": <b>
       "method": <s>,
       "path": <s>,
       "headers": {
@@ -90,22 +98,32 @@ where the individual `<request>`s are
       "keep-alive-requests": <n>,
       "clients": <n>,
       "delay": {
-         "min": <n>,
-         "max": <n>
-       },
+        "min": <n>,
+        "max": <n>
+      },
       "close": {
-         "client": <b>,
-         "linger": <n>
-       },
+        "client": <b>,
+        "linger": <n>
+      },
       "ramp-up": <n>
     }
 
 * **host_from**: a host (typically an IP address) to bind the source to.
   This was implemented to work around the port exhaustion problem.
-* **scheme**: URL scheme (http|https)
-* **tls-session-reuse**: Use TLS session reuse? (true|false)
 * **host**: target host
 * **port**: target port
+* **tcp**: TCP-related options
+  * **keep-alive**:
+    * **enable**: enable/disable TCP keep-alive (default false)
+    * **idle**: The number of seconds a connection needs to be idle before TCP begins sending
+      out keep-alive probes.  If unset or 0, system defaults are used.
+    * **intvl**: The number of seconds between TCP keep-alive probes.  If unset or 0,
+      system defaults are used.
+    * **cnt**: The maximum number of TCP keep-alive probes to send before giving up and
+      killing the connection if no response is obtained from the other end.  If unset or 0,
+      system defaults are used.
+* **scheme**: URL scheme (http|https)
+* **tls-session-reuse**: Use TLS session reuse? (true|false)
 * **method**: HTTP method (GET/HEAD/POST/...), see RFC 7231
 * **path**: URL path
 * **headers**: an array of custom HTTP headers
@@ -113,19 +131,19 @@ where the individual `<request>`s are
 * **max-requests**: how many HTTP requests to send to **host** in total.  If the value is 0 or
   unspecified, the requests will be sent for the entire duration of the test.  If there is no more
   HTTP requests to be sent for all hosts, the test may finish earlier than specified.
-* **keep-alive-requests**: how many HTTP requests to send within a single TCP connection, including 
-  the last "Connection: close" request.  If the value is 0 or unspecified, the 
+* **keep-alive-requests**: how many HTTP requests to send within a single TCP connection, including
+  the last "Connection: close" request.  If the value is 0 or unspecified, the
   "Connection: close" will never be sent.
-* **clients**: How many TCP connections to open against the target **host**.  This simulates 
+* **clients**: How many TCP connections to open against the target **host**.  This simulates
   concurrent client requests as the TCP connections do not block.
-* **delay**: random delay between requests in milliseconds.  The random delay is between **min** 
+* **delay**: random delay between requests in milliseconds.  The random delay is between **min**
   and **max**.
 * **close**: Options in this section are *experimental*.
   * **client**: Client/Server-side close.  If the value is "false" or unspecified, "Connection: close" header will be
     sent to the target host after reaching **keep-alive-requests** requests and the target host will be expected to close
-    the TCP connection first.  If the value is "true", the mb client will close the TCP connection after reaching 
+    the TCP connection first.  If the value is "true", the mb client will close the TCP connection after reaching
     **keep-alive-requests** requests.
-  * **linger**: How many seconds to linger for.  Set to 0 to to cause TCP connection abort on close(), and send a RST 
+  * **linger**: How many seconds to linger for.  Set to 0 to to cause TCP connection abort on close(), and send a RST
     to the target host.
 * **ramp-up**: time in seconds to "ramp up" to the **delay** above (per-thread slow start)
 
@@ -139,12 +157,12 @@ The optional request-response output CSV file has the following format:
 start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_id(7),conn_id(8),conns(9),reqs(10),start(11),socket_writable(12),conn_est(13),tls_reuse(14),err(15)
 ```
 
-* **start_request**: start of the request since the Epoch in microseconds.  For a HTTP 
+* **start_request**: start of the request since the Epoch in microseconds.  For a HTTP
   keep-alive (already established) connection this is the time the socket became
   writeable, just before the request data was written to a non-blocking socket.
   For a non-established connection, this is the time we first tried to establish
   this connection, i.e. just before a non-binding socket connect() call.
-* **delay**: time in microseconds it took for a full response (e.g. a complete 
+* **delay**: time in microseconds it took for a full response (e.g. a complete
   chunk-encoded message) to arrive since ``start_request''.  If there was an error
   before we received the full response, the delay is the time it took to receive
   the error.
@@ -160,18 +178,18 @@ start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_
 * **conn_id**: connection id (file descriptor).
 * **conns**: how many times we already connected (initial connection + reconnections).
   For HTTP keep-alive connections you should see numbers higher than 1.
-* **reqs**: number of HTTP requests sent over the connection since the last 
+* **reqs**: number of HTTP requests sent over the connection since the last
   (re-)connection.
 * **start**: time in microseconds (since the Epoch) we first tried to establish
   this connection.  Note that this time is equal for all HTTP keep-alive requests
   for this connection (if any).
-* **socket_writable**: time in microseconds it took for the socket to become 
-  writeable (since **start**).  Note that this time is the same for all HTTP 
+* **socket_writable**: time in microseconds it took for the socket to become
+  writeable (since **start**).  Note that this time is the same for all HTTP
   keep-alive requests within a connection.
 * **conn_est**: time in microseconds it took to establish this connection (since
-  **start**).  Note that this connection establishment delay is the 
-  same for all HTTP keep-alive requests within a connection.  Also, for plain 
-  HTTP requests this delay is equal to the **socket_writable** 
+  **start**).  Note that this connection establishment delay is the
+  same for all HTTP keep-alive requests within a connection.  Also, for plain
+  HTTP requests this delay is equal to the **socket_writable**
   value.  For TLS connections, the delay is increased by the TLS handshake.
 * **tls_reuse**: TLS session reused: [0|1].
 * **err**: an optional error message in case of a failure
@@ -183,9 +201,9 @@ I would like to thank the following people and organisations.
 In no particular order:
 
 * Igor Sysoev and Joyent, Inc. for their work on the HTTP parser
-* James McLaughlin et al. for his 
+* James McLaughlin et al. for his
   [low footprint JSON parser](https://github.com/udp/json-parser)
-* Salvatore Sanfilippo for his 
+* Salvatore Sanfilippo for his
   [async event-driven programming library](https://github.com/aisk/libae)
 * Will Glozer for his [wrk test client](https://github.com/wg/wrk)
 * wolfSSL Inc. for their [Embedded SSL Library](https://www.wolfssl.com/)

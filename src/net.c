@@ -25,6 +25,7 @@ void http_request_create(connection *, const char *, char **, size_t *);
 void http_request_create_cc(connection *);
 void http_request_create_ka(connection *);
 int socket_set_nonblock(int);
+int socket_set_keep_alive(int, int, int, int);
 static int tcp_non_block_bind_connect(connection *);
 int socket_readable(int);
 static void socket_write_enable(connection *);
@@ -198,6 +199,10 @@ void connection_init(connection *c) {
   c->port = 80;
   c->addr_from = NULL;
   c->addr_to = NULL;
+  c->tcp.keep_alive.enable = false;
+  c->tcp.keep_alive.idle = 0;
+  c->tcp.keep_alive.intvl = 0;
+  c->tcp.keep_alive.cnt = 0;
   c->method = NULL;
   c->path = NULL;
   c->headers = NULL;
@@ -295,6 +300,38 @@ int socket_set_nonblock(int fd) {
   return 0;
 }
 
+int socket_set_keep_alive(int fd, int idle, int intvl, int cnt) {
+  int flags = 1;
+  if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (void *)&flags, sizeof(flags)) == -1) {
+    error("unable to setsockopt SO_KEEPALIVE: %s\n", strerror(errno));
+    return -1;
+  }
+
+  /* Send first probe after `idle' seconds.  The default is 7200 (as of Linux 4.18.16). */
+  flags = idle;
+  if (flags && setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, (void *)&flags, sizeof(flags)) == -1) {
+    error("unable to setsockopt TCP_KEEPIDLE: %s\n", strerror(errno));
+    return -1;
+  }
+
+  /* Send the next probes after the specified interval. */
+  flags = intvl;
+  if (flags && setsockopt(fd, SOL_TCP, TCP_KEEPINTVL, (void *)&flags, sizeof(flags)) == -1) {
+    error("unable to setsockopt TCP_KEEPINTVL: %s\n", strerror(errno));
+    return -1;
+  }
+
+  /* Consider the socket in error state after we send cnt probes without getting
+     a reply. */
+  flags = cnt;
+  if (flags && setsockopt(fd, SOL_TCP, TCP_KEEPCNT, (void *)&flags, sizeof(flags)) == -1) {
+    error("unable to setsockopt TCP_KEEPCNT: %s\n", strerror(errno));
+    return -1;
+  }
+
+  return 0;
+}
+
 /* network address and service translation */
 int host_resolve(char *host, int port, struct addrinfo **addr) {
   char portstr[6];              /* strlen("65535") + 1 */
@@ -339,7 +376,7 @@ static int tcp_non_block_bind_connect(connection *c) {
     pthread_mutex_unlock(&socket_lock);
     if (fd == -1) continue;
 
-    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flags, sizeof(flags)) == -1) {
+    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flags, sizeof(flags)) == -1) {
       /* Disable the Nagle algorithm.  This means that segments are always sent
          as soon as possible, even if there is only a small amount of data. */
       error("unable to setsockopt TCP_NODELAY: %s (%d)\n", strerror(errno), errno);
@@ -347,17 +384,17 @@ static int tcp_non_block_bind_connect(connection *c) {
     }
 
 #if 0
-    if (setsockopt(fd, SOL_TCP, TCP_FASTOPEN, &flags, sizeof(flags)) == -1) {
+    if (setsockopt(fd, SOL_TCP, TCP_FASTOPEN, (void *)&flags, sizeof(flags)) == -1) {
       error("unable to setsockopt TCP_FASTOPEN: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
 
-    if (setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &flags, sizeof(flags)) == -1) {
+    if (setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, (void *)&flags, sizeof(flags)) == -1) {
       error("unable to setsockopt TCP_QUICKACK: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
 
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &flags, sizeof(flags)) == -1) {
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (void *)&flags, sizeof(flags)) == -1) {
       error("unable to setsockopt SO_RCVBUF: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
@@ -367,18 +404,21 @@ static int tcp_non_block_bind_connect(connection *c) {
       struct linger l;
       l.l_onoff = 1;
       l.l_linger = c->close_linger_sec;
-      if (setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l)) == -1) {
+      if (setsockopt(fd, SOL_SOCKET, SO_LINGER, (void *)&l, sizeof(l)) == -1) {
         error("unable to setsockopt SO_LINGER: %s (%d)\n", strerror(errno), errno);
         goto error;
       }
     }
 
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &flags, sizeof(flags)) == -1) {
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (void *)&flags, sizeof(flags)) == -1) {
       error("unable to setsockopt SO_REUSEADDR: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
 
     if (socket_set_nonblock(fd)) goto error;
+    if (c->tcp.keep_alive.enable)
+      if (socket_set_keep_alive(fd, c->tcp.keep_alive.idle, c->tcp.keep_alive.intvl, c->tcp.keep_alive.cnt))
+        goto error;
 
     if (c->addr_from) {
       bool bound = false;
