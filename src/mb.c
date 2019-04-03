@@ -832,6 +832,9 @@ int main(int argc, char **argv) {
   /* parse command-line arguments */
   args_parse(&cfg, argc, argv);
 
+  /* override nameservers if environment variable(s) NAMESERVER<x> exist */
+  override_ns();
+
   /* read the connections file */
   connections = requests_read(cfg.file_req);
 

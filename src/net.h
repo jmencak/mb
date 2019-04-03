@@ -119,13 +119,14 @@ typedef struct connection {
 } connection;
 
 /* Module functions */
-void http_requests_create(connection *);
-void connection_init(connection *);
-void connections_free(connection *);
-int host_resolve(char *host, int port, struct addrinfo **addr);
-void socket_connect(aeEventLoop *, int, void *, int);
+extern void http_requests_create(connection *);
+extern void connection_init(connection *);
+extern void connections_free(connection *);
+extern void override_ns();
+extern int host_resolve(char *host, int port, struct addrinfo **addr);
+extern void socket_connect(aeEventLoop *, int, void *, int);
 #if 0
-int headers_complete(http_parser *);
+extern int headers_complete(http_parser *);
 #endif
 extern int message_complete(http_parser *);
 extern int header_field(http_parser *, const char *, size_t);

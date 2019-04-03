@@ -3,6 +3,7 @@
 #include <fcntl.h>		/* fnctl() */
 #include <netdb.h>		/* freeaddrinfo() */
 #include <netinet/tcp.h>	/* TCP_NODELAY, TCP_FASTOPEN, ... */
+#include <resolv.h>		/* _res */
 #include <stdio.h>		/* stdout, stderr, fopen(), fclose() */
 #include <stdlib.h>		/* free() */
 #include <string.h>		/* strlen() */
@@ -330,6 +331,46 @@ int socket_set_keep_alive(int fd, int idle, int intvl, int cnt) {
   }
 
   return 0;
+}
+
+/* Override nameservers if environment variable(s) NAMESERVER<x> exist,
+   where <x> starts at 1. */
+void override_ns() {
+  int i;
+  int nscount = 0;
+
+  res_init();	/* initialize DNS structure _res */
+
+  for (i = 0; i < MAXNS; i++) {
+    char envvar[] = "NAMESERVERx";
+    const char *ns;
+
+    envvar[10] = '1' + i;
+
+    ns = getenv(envvar);
+    if (ns == NULL) break;
+    if (*ns == 0) continue;
+
+    if (inet_pton(AF_INET, ns, &_res.nsaddr_list[i].sin_addr) < 1) {
+      error("ignoring invalid nameserver %s (%s)\n", envvar, ns);
+      continue;
+    }
+
+    nscount++;
+  }
+
+  if (nscount > 0) {
+    /* valid nameserver(s) found, adjust the _res nameserver count */
+    _res.nscount = nscount;
+
+    info("found nameserver override:\n");
+    for (i = 0; i < _res.nscount; i++) {
+      char buf[INET_ADDRSTRLEN];
+
+      inet_ntop(AF_INET, &_res.nsaddr_list[i].sin_addr, buf, sizeof(buf));
+      info("NAMESERVER%d: %s\n", i + 1, buf);
+    }
+  }
 }
 
 /* network address and service translation */
