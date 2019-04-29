@@ -149,6 +149,7 @@ where the individual `<request>`s are
 
 Note that all of the above are *optional*, apart from the target **host**.
 
+
 ## CSV response file
 
 The optional request-response output CSV file has the following format:
@@ -193,6 +194,17 @@ start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_
   value.  For TLS connections, the delay is increased by the TLS handshake.
 * **tls_reuse**: TLS session reused: [0|1].
 * **err**: an optional error message in case of a failure
+
+
+## Creating a container image with the mb client
+
+A minimalist container image with the `mb` client can be created by one of the
+following commands.
+
+```
+$ docker build -t `<container_image_tag>` -f containers/Dockerfile.busybox .
+$ buildah bud  -t `<container_image_tag>` -f containers/Dockerfile.busybox .
+```
 
 
 ## Credits
