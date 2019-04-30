@@ -10,103 +10,113 @@ it combines a multithreaded design with scalable event notification systems.
 
 ## Quick start
 
-    $ mb -h
+```
+$ mb -h
+```
 
 mb expects specification of the requests it sends in a JSON file.
 A simple (requests.json) example:
 
-    [
-      {
-        "scheme": "http",
-        "host": "www.example.com",
-        "port": 80,
-        "method": "GET",
-        "path": "/",
-        "delay": {
-          "min": 1000,
-          "max": 2000,
-        },
-        "keep-alive-requests": 100,
-        "clients": 2,
-      },
-      {
-        "scheme": "https",
-        "tls-session-reuse": true,
-        "host": "example.com",
-        "port": 443,
-        "method": "POST",
-        "path": "/",
-        "headers": {
-          "Content-Type": "application/x-www-form-urlencoded"
-        },
-        "body": "name=user&email=user@example.com",
-        "delay": {
-          "min": 3000,
-          "max": 5000,
-        },
-        "keep-alive-requests": 1,
-        "clients": 3,
-      }
-    ]
+```
+[
+  {
+    "scheme": "http",
+    "host": "www.example.com",
+    "port": 80,
+    "method": "GET",
+    "path": "/",
+    "delay": {
+      "min": 1000,
+      "max": 2000,
+    },
+    "keep-alive-requests": 100,
+    "clients": 2,
+  },
+  {
+    "scheme": "https",
+    "tls-session-reuse": true,
+    "host": "example.com",
+    "port": 443,
+    "method": "POST",
+    "path": "/",
+    "headers": {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    "body": "name=user&email=user@example.com",
+    "delay": {
+      "min": 3000,
+      "max": 5000,
+    },
+    "keep-alive-requests": 1,
+    "clients": 3,
+  }
+]
+```
 
 A quick run with an optional output response stats file
 
-    $ mb -d10 -i requests.json -o responses.csv
-    Time: 10.05s
-    Sent: 1.51kiB, 153.87B/s
-    Recv: 21.55kiB, 2.14kiB/s
-    Hits: 14, 1.39/s
+```
+$ mb -d10 -i requests.json -o responses.csv
+Time: 10.05s
+Sent: 1.51kiB, 153.87B/s
+Recv: 21.55kiB, 2.14kiB/s
+Hits: 14, 1.39/s
+```
 
 
 ## JSON request file
 
 The JSON request file format is
 
-    [
-      <request 1>,
-      <request 2>,
-      ...
-      <request n>
-    ]
+```
+[
+  <request 1>,
+  <request 2>,
+  ...
+  <request n>
+]
+```
 
 where the individual `<request>`s are
 
-    {
-      "host_from": <s>,
-      "host": <s>,
-      "port": <n>,
-      "tcp": {
-        "keep-alive": {
-          "enable": <b>,
-          "idle": <n>,
-          "intvl": <n>,
-          "cnt": <n>
-        }
-      },
-      "scheme": <s>,
-      "tls-session-reuse": <b>
-      "method": <s>,
-      "path": <s>,
-      "headers": {
-        "X-Custom-Header-1": <s>,
-        "X-Custom-Header-2": <s>,
-        ...
-        "X-Custom-Header-n": <s>
-      },
-      "body": <s>,
-      "max-requests": <n>,
-      "keep-alive-requests": <n>,
-      "clients": <n>,
-      "delay": {
-        "min": <n>,
-        "max": <n>
-      },
-      "close": {
-        "client": <b>,
-        "linger": <n>
-      },
-      "ramp-up": <n>
+```
+{
+  "host_from": <s>,
+  "host": <s>,
+  "port": <n>,
+  "tcp": {
+    "keep-alive": {
+      "enable": <b>,
+      "idle": <n>,
+      "intvl": <n>,
+      "cnt": <n>
     }
+  },
+  "scheme": <s>,
+  "tls-session-reuse": <b>
+  "method": <s>,
+  "path": <s>,
+  "headers": {
+    "X-Custom-Header-1": <s>,
+    "X-Custom-Header-2": <s>,
+    ...
+    "X-Custom-Header-n": <s>
+  },
+  "body": <s>,
+  "max-requests": <n>,
+  "keep-alive-requests": <n>,
+  "clients": <n>,
+  "delay": {
+    "min": <n>,
+    "max": <n>
+  },
+  "close": {
+    "client": <b>,
+    "linger": <n>
+  },
+  "ramp-up": <n>
+}
+```
 
 * **host_from**: a host (typically an IP address) to bind the source to.
   This was implemented to work around the port exhaustion problem.
@@ -202,8 +212,8 @@ A minimalist container image with the `mb` client can be created by one of the
 following commands.
 
 ```
-$ docker build -t `<container_image_tag>` -f containers/Dockerfile.busybox .
-$ buildah bud  -t `<container_image_tag>` -f containers/Dockerfile.busybox .
+$ docker build -t <container_image_tag> -f containers/Dockerfile.busybox .
+$ buildah bud  -t <container_image_tag> -f containers/Dockerfile.busybox .
 ```
 
 
