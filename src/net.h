@@ -13,7 +13,7 @@
 
 #define RECVBUF		8192
 #define SNDBUF		8192
-#define MAX_REQ_LEN	2<<21		/* maximum number of characters to send to a server: 4M */
+#define MAX_REQ_LEN	(1UL<<22)	/* maximum number of characters to send to a server: 4M */
 
 #define HTTP_CRLF	"\r\n"
 #define HTTP_PROTO	"HTTP/1.1"
