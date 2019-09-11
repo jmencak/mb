@@ -10,13 +10,13 @@
 extern WOLFSSL_CTX *ctx;
 
 /* Module functions */
-WOLFSSL_CTX *ssl_init(int);
-WOLFSSL *ssl_new(connection *);
-int ssl_free(connection *c);
-void ssl_shutdown();
-int ssl_connect(connection *);
-ssize_t ssl_read(WOLFSSL *, void *, int);
-int ssl_readable(connection *);
-ssize_t ssl_write(WOLFSSL *, void *, int);
+extern WOLFSSL_CTX *ssl_init(int);
+extern WOLFSSL *ssl_new(connection *);
+extern int ssl_free(connection *c);
+extern void ssl_shutdown();
+extern int ssl_connect(connection *);
+extern ssize_t ssl_read(WOLFSSL *, void *, int);
+extern int ssl_readable(connection *);
+extern ssize_t ssl_write(WOLFSSL *, void *, int);
 
 #endif /* SSL_H */

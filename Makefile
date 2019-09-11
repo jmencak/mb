@@ -50,13 +50,15 @@ $(WOLFSSL_LIB): $(DEP_DIR)/$(WOLFSSL_ARCHIVE)
 	(cd $(WOLFSSL_DIR) && \
 	  mkdir -p .git && \
 	  ./autogen.sh && \
-	  ./configure \
+	  ./configure CFLAGS="-Wno-stringop-truncation -Wno-stringop-overflow -Wno-size-of-pointer-memaccess" \
+	    --disable-examples \
 	    --enable-aesni \
 	    --enable-fastmath \
 	    --enable-hugecache \
 	    --enable-intelasm \
 	    --enable-oldtls \
 	    --enable-secure-renegotiation \
+	    --enable-session-ticket \
 	    --enable-sni \
 	    --enable-sslv3 \
 	    --enable-static \

@@ -1,0 +1,24 @@
+# Build container stage
+FROM centos:7
+
+COPY . /mb
+
+RUN yum -y groupinstall 'Development Tools' && \
+    cd /mb && \
+    make mb
+
+# mb container
+FROM busybox:1.30.1-glibc
+
+COPY --from=0 /mb/mb /usr/local/bin/mb
+
+RUN chmod 755 /usr/local/bin/mb && \
+    mkdir -p /data
+
+WORKDIR /data
+
+VOLUME ["/data"]
+
+ENTRYPOINT ["/usr/local/bin/mb"]
+
+CMD ["--help"]

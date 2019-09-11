@@ -12,13 +12,18 @@
 #include "../nginx/http_parser.h"	/* http_parser */
 
 #define RECVBUF		8192
-#define MAX_REQ_LEN	4096		/* maximum number of characters to send to a server */
+#define SNDBUF		8192
+#define MAX_REQ_LEN	(1UL<<22)	/* maximum number of characters to send to a server: 4M */
 
-#define HTTP_EOL	"\r\n"
-#define HTTP_REQUEST	"%s %s HTTP/1.1" HTTP_EOL "Host: %s" HTTP_EOL "User-Agent: " PGNAME "/" MB_VERSION HTTP_EOL "Accept: */*" HTTP_EOL "%s" HTTP_EOL "%s"
+#define HTTP_CRLF	"\r\n"
+#define HTTP_PROTO	"HTTP/1.1"
+#define HTTP_HOST	"Host"
+#define HTTP_USER_AGENT	"User-Agent: " PGNAME "/" MB_VERSION
+#define HTTP_ACCEPT	"Accept: */*"
 #define HTTP_COOKIE	"Cookie"
 #define HTTP_CONN_CLOSE	"Connection: close"
-#define CONTENT_LENGTH	"Content-Length"
+#define HTTP_CONT_LEN	"Content-Length"
+#define HTTP_CONT_MAX	20		/* generous 64-bit long content length maximum */
 
 #define SOCK_READ(fd, buf, len)		recv(fd, buf, len, MSG_NOSIGNAL)
 #define SOCK_WRITE(fd, buf, len)	send(fd, buf, len, MSG_NOSIGNAL)
@@ -27,7 +32,7 @@
 #ifdef HAVE_SSL
 #define CONN_READ(c, len)	((c->scheme == https)? ssl_read(c->ssl, c->t->buf, len): SOCK_READ(c->fd, c->t->buf, len))
 #define CONN_WRITE(c, buf, len)	((c->scheme == https)? ssl_write(c->ssl, buf, len): SOCK_WRITE(c->fd, buf, len))
-#define CONN_READABLE(c)	((c->scheme == https)? ssl_readable(c->fd): SOCK_READABLE(c->fd))
+#define CONN_READABLE(c)	((c->scheme == https)? ssl_readable(c): SOCK_READABLE(c->fd))
 #else
 #define CONN_READ(c, len)	SOCK_READ(c->fd, c->t->buf, len)
 #define CONN_WRITE(c, buf, len)	SOCK_WRITE(c->fd, buf, len)
@@ -60,6 +65,14 @@ typedef struct connection {
   int port;			/* target port */
   struct addrinfo *addr_from;	/* translated network address and service information for host_from */
   struct addrinfo *addr_to;	/* translated network address and service information for host/port */
+  struct {
+    struct {
+      bool enable;		/* enable TCP keep-alive */
+      int idle;			/* # of seconds a connection needs to be idle before TCP begins sending probes */
+      int intvl;		/* the number of seconds between TCP keep-alive probes */
+      int cnt;			/* the maximum number of TCP keep-alive probes to send */
+    } keep_alive;
+  } tcp;
   char *method;			/* method: (GET, HEAD, POST, PUT, DELETE, ...) */
   char *path;			/* URL path */
   key_value *headers;		/* key/value header pairs */
@@ -85,7 +98,11 @@ typedef struct connection {
   char *req_body;		/* HTTP request body to send to a server */
   char *request;		/* HTTP request data (headers & body combined) to send to a server (keep-alive) */
   char *request_cclose;		/* HTTP request data (headers & body combined) to send to a server ("Connection: close") */
-  bool conn_close;		/* Is the current request built as "Connection: close" request? */
+  bool close_client;		/* Should the client initiate connection close? */
+  bool close_linger;		/* Enable socket lingering? */
+  uint64_t close_linger_sec;	/* how many seconds to linger for */
+  bool cclose;			/* Should the client close connection upon receiving response? */
+  bool header_cclose;		/* Is the current request built as "Connection: close" request? */
   size_t request_length;	/* HTTP request data (headers & body combined) to send to a server length (keep-alive) */
   size_t request_cclose_length;	/* HTTP request data (headers & body combined) to send to a server length ("Connection: close") */
   bool message_complete;	/* Do we have a complete HTTP response on this connection? */
@@ -102,13 +119,14 @@ typedef struct connection {
 } connection;
 
 /* Module functions */
-void http_requests_create(connection *);
-void connection_init(connection *);
-void connections_free(connection *);
-int host_resolve(char *host, int port, struct addrinfo **addr);
-void socket_connect(aeEventLoop *, int, void *, int);
+extern void http_requests_create(connection *);
+extern void connection_init(connection *);
+extern void connections_free(connection *);
+extern void override_ns();
+extern int host_resolve(char *host, int port, struct addrinfo **addr);
+extern void socket_connect(aeEventLoop *, int, void *, int);
 #if 0
-int headers_complete(http_parser *);
+extern int headers_complete(http_parser *);
 #endif
 extern int message_complete(http_parser *);
 extern int header_field(http_parser *, const char *, size_t);

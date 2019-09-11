@@ -3,6 +3,7 @@
 #include <fcntl.h>		/* fnctl() */
 #include <netdb.h>		/* freeaddrinfo() */
 #include <netinet/tcp.h>	/* TCP_NODELAY, TCP_FASTOPEN, ... */
+#include <resolv.h>		/* _res */
 #include <stdio.h>		/* stdout, stderr, fopen(), fclose() */
 #include <stdlib.h>		/* free() */
 #include <string.h>		/* strlen() */
@@ -25,8 +26,10 @@ void http_request_create(connection *, const char *, char **, size_t *);
 void http_request_create_cc(connection *);
 void http_request_create_ka(connection *);
 int socket_set_nonblock(int);
+int socket_set_keep_alive(int, int, int, int);
 static int tcp_non_block_bind_connect(connection *);
 int socket_readable(int);
+static void socket_write_enable(connection *);
 static int socket_connect_delay_passed(aeEventLoop *, long long, void *);
 static int socket_write_delay_passed(aeEventLoop *, long long, void *);
 static inline bool connection_delay(connection *, aeTimeProc *);
@@ -51,6 +54,10 @@ void aeCreateFileEventOrDie(aeEventLoop *eventLoop, int fd, int mask,
   }
 }
 
+/*
+ * Create HTTP headers
+ * Note: this function has a side effect of trimming request body, when content length is too large.
+ */
 static inline char *http_headers_create(connection *c, bool conn_close) {
   connection *cs_ptr = c;
   size_t headers_len = 0;
@@ -58,6 +65,11 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
   char *headers_ptr;
 
   /* calculate headers length */
+  headers_len += strlen(c->method ? c->method : "GET") + 1 + strlen(c->path ? c->path : "/") + 1 + strlen(HTTP_PROTO) + 2;	/* + 2x spaces + HTTP_CRLF */
+  headers_len += strlen(HTTP_HOST) + 2 + strlen(c->host ? c->host : "localhost") + 2;	/* + ': ' + HTTP_CRLF */
+  headers_len += strlen(HTTP_USER_AGENT) + 2;		/* + HTTP_CRLF */
+  headers_len += strlen(HTTP_ACCEPT) + 2;		/* + HTTP_CRLF */
+
   if (cs_ptr->headers) {
     key_value *kv;
     for (kv = c->headers; kv->key; kv++) {
@@ -69,9 +81,9 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
   if (cs_ptr->cookies) {
     headers_len += 6 + strlen(cs_ptr->cookies) + 4;	/* HTTP_COOKIE + cookie length + separators */
   }
-  if (conn_close) headers_len += 17 + 2;	/* HTTP_CONN_CLOSE + separators */
+  if (conn_close) headers_len += 17 + 2;		/* HTTP_CONN_CLOSE + separators */
   if (cs_ptr->req_body) {
-    headers_len += 14 + 4 + 20;			/* CONTENT_LENGTH + separators + 64-bit long content length */
+    headers_len += 14 + 4 + HTTP_CONT_MAX;		/* HTTP_CONT_LEN + separators + HTTP_CONT_MAX */
   }
 
   if ((headers = calloc(headers_len + 1, sizeof(char))) == NULL)
@@ -79,6 +91,15 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
 
   /* fill in the headers string */
   headers_ptr = headers;
+  headers_ptr += sprintf(headers_ptr,
+           "%s %s " HTTP_PROTO HTTP_CRLF
+           HTTP_HOST ": %s" HTTP_CRLF
+           HTTP_USER_AGENT HTTP_CRLF
+           HTTP_ACCEPT HTTP_CRLF,
+           c->method ? c->method : "GET",
+           c->path ? c->path : "/",
+           c->host ? c->host : "localhost");
+
   if (cs_ptr->headers) {
     key_value *kv;
     for (kv = c->headers; kv->key; kv++) {
@@ -90,7 +111,7 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
         strcpy(headers_ptr, kv->value);
         headers_ptr += strlen(kv->value);
       }
-      strcpy(headers_ptr, HTTP_EOL);
+      strcpy(headers_ptr, HTTP_CRLF);
       headers_ptr += 2;
     }
   }
@@ -102,20 +123,26 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
     headers_ptr += 2;
     strcpy(headers_ptr, cs_ptr->cookies);
     headers_ptr += strlen(cs_ptr->cookies);
-    strcpy(headers_ptr, HTTP_EOL);
+    strcpy(headers_ptr, HTTP_CRLF);
     headers_ptr += 2;
   }
   if (conn_close) {
     /* Add "Connection: close" header */
-    strcpy(headers_ptr, HTTP_CONN_CLOSE HTTP_EOL);
+    strcpy(headers_ptr, HTTP_CONN_CLOSE HTTP_CRLF);
     headers_ptr += 17 + 2;	/* HTTP_CONN_CLOSE + separators */
   }
+
   if (cs_ptr->req_body) {
     /* Add Content-Length header */
     size_t content_len = strlen(cs_ptr->req_body);
-    strcpy(headers_ptr, CONTENT_LENGTH);
-    headers_ptr += strlen(CONTENT_LENGTH);
-    sprintf(headers_ptr, ": %lu" HTTP_EOL, content_len);
+    strcpy(headers_ptr, HTTP_CONT_LEN);
+    headers_ptr += strlen(HTTP_CONT_LEN);
+    if (headers_len + 2 + content_len > MAX_REQ_LEN) {
+      warning("content length too large (%ld), trimming; consider increasing MAX_REQ_LEN (%ld)\n", content_len, MAX_REQ_LEN);
+      content_len = MAX_REQ_LEN - headers_len - 2;
+      cs_ptr->req_body[content_len] = 0;
+    }
+    sprintf(headers_ptr, ": %lu" HTTP_CRLF, content_len);
   }
 
   return headers;
@@ -123,17 +150,15 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
 
 void http_request_create(connection *c, const char *headers, char **request, size_t *length)
 {
-  if ((*request = malloc(MAX_REQ_LEN + 1)) == NULL) {
+  size_t request_len = strlen(headers) + 2 + (c->req_body? strlen(c->req_body): 0) + 1;	/* + HTTP_CRLF + '\0' */
+  if ((*request = malloc(request_len + 1)) == NULL) {
     fprintf(stderr, "malloc(): cannot allocate memory for HTTP request\n");
     exit(EXIT_FAILURE);
   }
 
-  snprintf(*request, MAX_REQ_LEN, HTTP_REQUEST,
-	   c->method ? c->method : "GET",
-	   c->path ? c->path : "/",
-	   c->host ? c->host : "localhost",
-	   headers? headers: "",
-	   c->req_body ? c->req_body : "");
+  snprintf(*request, request_len, "%s" HTTP_CRLF "%s",
+           headers? headers: "",
+           c->req_body ? c->req_body : "");
 
   *length = strlen(*request);
 }
@@ -175,6 +200,10 @@ void connection_init(connection *c) {
   c->port = 80;
   c->addr_from = NULL;
   c->addr_to = NULL;
+  c->tcp.keep_alive.enable = false;
+  c->tcp.keep_alive.idle = 0;
+  c->tcp.keep_alive.intvl = 0;
+  c->tcp.keep_alive.cnt = 0;
   c->method = NULL;
   c->path = NULL;
   c->headers = NULL;
@@ -198,7 +227,11 @@ void connection_init(connection *c) {
   c->req_body = NULL;
   c->request = NULL;
   c->request_cclose = NULL;
-  c->conn_close = false;
+  c->close_client = false;
+  c->close_linger = false;
+  c->close_linger_sec = 0;
+  c->cclose = false;
+  c->header_cclose = false;
   c->request_length = 0;
   c->request_cclose_length = 0;
   c->message_complete = false;
@@ -256,16 +289,88 @@ int socket_set_nonblock(int fd) {
   int flags;
 
   if ((flags = fcntl(fd, F_GETFL, 0)) == -1) {
-    error("fcntl(F_GETFL): %s\n", strerror(errno));
+    error("fcntl(F_GETFL): %s (%d)\n", strerror(errno), errno);
     return -1;
   }
 
   if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
-    error("fcntl(F_SETFL, O_NONBLOCK): %s\n", strerror(errno));
+    error("fcntl(F_SETFL, O_NONBLOCK): %s (%d)\n", strerror(errno), errno);
     return -1;
   }
 
   return 0;
+}
+
+int socket_set_keep_alive(int fd, int idle, int intvl, int cnt) {
+  int flags = 1;
+  if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (void *)&flags, sizeof(flags)) == -1) {
+    error("unable to setsockopt SO_KEEPALIVE: %s\n", strerror(errno));
+    return -1;
+  }
+
+  /* Send first probe after `idle' seconds.  The default is 7200 (as of Linux 4.18.16). */
+  flags = idle;
+  if (flags && setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, (void *)&flags, sizeof(flags)) == -1) {
+    error("unable to setsockopt TCP_KEEPIDLE: %s\n", strerror(errno));
+    return -1;
+  }
+
+  /* Send the next probes after the specified interval. */
+  flags = intvl;
+  if (flags && setsockopt(fd, SOL_TCP, TCP_KEEPINTVL, (void *)&flags, sizeof(flags)) == -1) {
+    error("unable to setsockopt TCP_KEEPINTVL: %s\n", strerror(errno));
+    return -1;
+  }
+
+  /* Consider the socket in error state after we send cnt probes without getting
+     a reply. */
+  flags = cnt;
+  if (flags && setsockopt(fd, SOL_TCP, TCP_KEEPCNT, (void *)&flags, sizeof(flags)) == -1) {
+    error("unable to setsockopt TCP_KEEPCNT: %s\n", strerror(errno));
+    return -1;
+  }
+
+  return 0;
+}
+
+/* Override nameservers if environment variable(s) NAMESERVER<x> exist,
+   where <x> starts at 1. */
+void override_ns() {
+  int i;
+  int nscount = 0;
+
+  res_init();	/* initialize DNS structure _res */
+
+  for (i = 0; i < MAXNS; i++) {
+    char envvar[] = "NAMESERVERx";
+    const char *ns;
+
+    envvar[10] = '1' + i;
+
+    ns = getenv(envvar);
+    if (ns == NULL) break;
+    if (*ns == 0) continue;
+
+    if (inet_pton(AF_INET, ns, &_res.nsaddr_list[i].sin_addr) < 1) {
+      error("ignoring invalid nameserver %s (%s)\n", envvar, ns);
+      continue;
+    }
+
+    nscount++;
+  }
+
+  if (nscount > 0) {
+    /* valid nameserver(s) found, adjust the _res nameserver count */
+    _res.nscount = nscount;
+
+    info("found nameserver override:\n");
+    for (i = 0; i < _res.nscount; i++) {
+      char buf[INET_ADDRSTRLEN];
+
+      inet_ntop(AF_INET, &_res.nsaddr_list[i].sin_addr, buf, sizeof(buf));
+      info("NAMESERVER%d: %s\n", i + 1, buf);
+    }
+  }
 }
 
 /* network address and service translation */
@@ -312,36 +417,49 @@ static int tcp_non_block_bind_connect(connection *c) {
     pthread_mutex_unlock(&socket_lock);
     if (fd == -1) continue;
 
-    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flags, sizeof(flags)) == -1) {
+    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (void *)&flags, sizeof(flags)) == -1) {
       /* Disable the Nagle algorithm.  This means that segments are always sent
          as soon as possible, even if there is only a small amount of data. */
-      error("unable to setsockopt TCP_NODELAY: %s\n", strerror(errno));
+      error("unable to setsockopt TCP_NODELAY: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
 
 #if 0
-    if (setsockopt(fd, SOL_TCP, TCP_FASTOPEN, &flags, sizeof(flags)) == -1) {
-      error("unable to setsockopt TCP_FASTOPEN: %s\n", strerror(errno));
+    if (setsockopt(fd, SOL_TCP, TCP_FASTOPEN, (void *)&flags, sizeof(flags)) == -1) {
+      error("unable to setsockopt TCP_FASTOPEN: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
 
-    if (setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &flags, sizeof(flags)) == -1) {
-      error("unable to setsockopt TCP_QUICKACK: %s\n", strerror(errno));
+    if (setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, (void *)&flags, sizeof(flags)) == -1) {
+      error("unable to setsockopt TCP_QUICKACK: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
 
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &flags, sizeof(flags)) == -1) {
-      error("unable to setsockopt SO_RCVBUF: %s\n", strerror(errno));
+    if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (void *)&flags, sizeof(flags)) == -1) {
+      error("unable to setsockopt SO_RCVBUF: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
 #endif
 
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &flags, sizeof(flags)) == -1) {
-      error("unable to setsockopt SO_REUSEADDR: %s\n", strerror(errno));
+    if (c->close_linger) {
+      struct linger l;
+      l.l_onoff = 1;
+      l.l_linger = c->close_linger_sec;
+      if (setsockopt(fd, SOL_SOCKET, SO_LINGER, (void *)&l, sizeof(l)) == -1) {
+        error("unable to setsockopt SO_LINGER: %s (%d)\n", strerror(errno), errno);
+        goto error;
+      }
+    }
+
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (void *)&flags, sizeof(flags)) == -1) {
+      error("unable to setsockopt SO_REUSEADDR: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
 
     if (socket_set_nonblock(fd)) goto error;
+    if (c->tcp.keep_alive.enable)
+      if (socket_set_keep_alive(fd, c->tcp.keep_alive.idle, c->tcp.keep_alive.intvl, c->tcp.keep_alive.cnt))
+        goto error;
 
     if (c->addr_from) {
       bool bound = false;
@@ -371,7 +489,7 @@ end:
     return fd;
   }
   if (a == NULL)
-    error("creating socket: %s\n", strerror(errno));
+    error("creating socket: %s (%d)\n", strerror(errno), errno);
 
 error:
   if (fd != -1) close(fd);
@@ -382,6 +500,12 @@ int socket_readable(int fd) {
   int n, rc;
   rc = ioctl(fd, FIONREAD, &n);		/* Get the number of bytes that are immediately available for reading. */
   return rc == -1 ? 0 : n;
+}
+
+static void socket_write_enable(connection *c) {
+  c->written = 0;
+  c->cstats.established = 0;
+  aeCreateFileEventOrDie(c->t->loop, c->fd, AE_WRITABLE, socket_write, c);
 }
 
 static int socket_connect_delay_passed(aeEventLoop *loop, long long id, void *data) {
@@ -396,7 +520,7 @@ static int socket_write_delay_passed(aeEventLoop *loop, long long id, void *data
   connection *c = data;
   c->delayed = false;
   aeDeleteTimeEvent(loop, c->delayed_id);
-  aeCreateFileEventOrDie(loop, c->fd, AE_WRITABLE, socket_write, c);
+  socket_write_enable(c);
   return AE_NOMORE;
 }
 
@@ -416,13 +540,9 @@ static inline bool connection_delay(connection *c, aeTimeProc *f_cb) {
       }
     }
     delay = (delay_min == delay_max)? delay_max: (rand() % (delay_max - delay_min + 1)) + delay_min;
-    if (c->fd != -1) {
-      /* the check above is necessary, we are not necessarily connected (have a valid fd) here */
-      aeDeleteFileEvent(c->t->loop, c->fd, AE_WRITABLE);
-    }
     c->delayed_id = aeCreateTimeEvent(c->t->loop, delay, f_cb, c, NULL);
     if (c->delayed_id == AE_ERR) {
-      die(EXIT_FAILURE, "cannot create time event (delay): %s\n", strerror(errno));
+      die(EXIT_FAILURE, "cannot create time event (delay): %s (%d)\n", strerror(errno), errno);
     }
     return true;
   }
@@ -442,8 +562,8 @@ void socket_connect(aeEventLoop *loop, int fd, void *data, int flags) {
 
   if (c->fd < 0) {
     char *msg = strerror(errno);
-    error("cannot connect to %s:%d: %s\n", c->host, c->port, msg);
-    if (errno == EMFILE) die(EXIT_FAILURE, "%s\n", msg);
+    error("cannot connect to %s:%d: %s (%d)\n", c->host, c->port, msg, errno);
+    if (errno == EMFILE) die(EXIT_FAILURE, "%s (%d)\n", msg, errno);
     return;
   } else {
     /* connected to host c->host */
@@ -463,7 +583,7 @@ void socket_connect(aeEventLoop *loop, int fd, void *data, int flags) {
   http_parser_init(&c->parser, HTTP_RESPONSE);
   c->parser.data = c;
 
-  aeCreateFileEventOrDie(loop, c->fd, AE_WRITABLE, socket_write, c);
+  socket_write_enable(c);
 }
 
 void socket_reconnect(connection *c) {
@@ -472,8 +592,19 @@ void socket_reconnect(connection *c) {
 #endif
   if (c->fd != -1) {
     aeDeleteFileEvent(c->t->loop, c->fd, AE_READABLE | AE_WRITABLE);
-    close(c->fd);
+    if (shutdown(c->fd, SHUT_RDWR) == -1) {
+      /* Ignore errors on shutdown(), e.g. when the target is no longer connected */
+    }
+    if (close(c->fd) == -1) {
+      error("socket_reconnect(): close() failed: [%d] %s (%d)\n", c->fd, strerror(errno), errno);
+    }
+    c->fd = -1;
   }
+  if (c->delayed_id) {
+    /* we have a delayed time event on this connection, delete it */
+    aeDeleteTimeEvent(c->t->loop, c->delayed_id);
+  }
+
   free(c->cookies); c->cookies = NULL;
   c->delayed = c->delay_max;
   c->cstats.writeable = 0;
@@ -488,57 +619,84 @@ void socket_reconnect(connection *c) {
 void socket_read(aeEventLoop *loop, int fd, void *data, int flags) {
   ssize_t n;
   connection *c = data;
+  size_t parser_n_parsed;
+  int parser_old_state=c->parser.state;
 
   do {
     n = CONN_READ(c, RECVBUF);
 
     if (n < 0) {
       if (errno == EAGAIN) {
-        if (c->conn_close) {
-          /* Request with "Connection: close" header. */
-          return;
-        }
-        /* HTTP keep-alive request */
-        break;
-      }
-      if (c->message_complete) {
-        /* message already complete, reconnect or send more data if keep-alive */
-        break;
+        return;
       }
 
-      error("cannot read from [%d] (%s:%d): %s: reconnecting...\n", c->fd, c->host, c->port, strerror(errno));
+      /* ECONNRESET (104) and simillar */
+      error("cannot read from [%d] (%s:%d): %s: (%d) reconnecting...\n", c->fd, c->host, c->port, strerror(errno), errno);
       goto err_conn;
     }
 
-    /* successfully read from a socket data or received EOF (n == 0) */
+    if (n == 0) {
+      /*
+       * Stream socket peer has performed an orderly shutdown (EOF).
+       * This doesn't need to be client initiated, e.g. server-side disconnect to keep
+       * the number of non-active TCP open connections low.
+       */
+      error("host sent an empty reply [%d] (%s:%d): %s: (%d) reconnecting...\n", c->fd, c->host, c->port, strerror(errno), errno);
+      goto err_conn;
+    }
+
+    /* successfully read from a socket */
     c->read += n;
     c->cstats.read_total += n;
     c->t->buf[n] = '\0';
 
-    if (c->parser.data) {
-      size_t n_parsed;
-
-      int old_state=c->parser.state;
-      n_parsed = http_parser_execute(&c->parser, &parser_settings, c->t->buf, (size_t)n);
-      if (n_parsed != n) {
-        error("parser [%d] (%s:%d): %lu != %lu; %d->%d; reconnecting...\n", c->fd, c->host, c->port, n_parsed, n, old_state, c->parser.state);
-        goto err_parser;
-      }
+    parser_old_state=c->parser.state;
+    parser_n_parsed = http_parser_execute(&c->parser, &parser_settings, c->t->buf, (size_t)n);
+    if (parser_n_parsed != n) {
+      error("parser [%d] (%s:%d): %lu != %lu; %d->%d; reconnecting...\n", c->fd, c->host, c->port, parser_n_parsed, n, parser_old_state, c->parser.state);
+      goto err_parser;
     }
-  } while (n != 0);
+#ifdef HAVE_SSL
+    /*
+     * With SSL we cannot rely on the event loop (epoll) to trigger the next socket_read().
+     * The following code is necessary when we have a small RECVBUF, i.e. (n == RECVBUF)
+     */
+    if (c->ssl && CONN_READABLE(c)) {
+      /* there is data buffered and available in the SSL object to be read */
+      continue;
+    }
+#endif
+    break;
+  } while (true);
 
-  if (c->conn_close || !http_should_keep_alive(&c->parser)) {
+  if (c->message_complete) {
+    /* HTTP response is fully retrieved */
+  } else {
+    /* HTTP response is not yet fully retrieved */
+    return;
+  }
+
+  /* we have a fully retrieved HTTP response */
+  if (c->header_cclose || !http_should_keep_alive(&c->parser)) {
+    /* we asked for a connection close or host responded with "Connection: close", or both */
     goto reconnect;
   }
   /* we have a HTTP keep-alive connection */
 
-  if (!c->message_complete) {
-    /* HTTP response is not yet fully retrieved */
-    return;
+  if (c->cclose) {
+    /* we have a complete response and closing the connection from the client side */
+    goto reconnect;
   }
   /* we have a complete response and continue with HTTP keep-alive requests on the current connection */
   c->read = 0;
-  aeCreateFileEventOrDie(c->t->loop, c->fd, AE_WRITABLE, socket_write, c);
+
+  if (connection_delay(c, socket_write_delay_passed)) {
+    /* delayed write on the current connection */
+    return;
+  }
+
+  /* no delay, schedule a write event immediately */
+  socket_write_enable(c);
   return;
 
 err_parser:
@@ -559,13 +717,10 @@ reconnect:
 void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
   ssize_t n;
   connection *c = data;
+  bool cclose = false;
   uint64_t now_writable;
   size_t request_len, write_len;
   char *request;
-
-  if (connection_delay(c, socket_write_delay_passed))
-    /* delayed connection */
-    return;
 
   if (c->reqs_max && c->cstats.reqs_total >= c->reqs_max) {
     /* we reached the maximum number of hits allowed */
@@ -573,16 +728,23 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
     if (requests_max_cb) requests_max_cb();
     return;
   }
-  c->conn_close = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
+  cclose = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
+  if (c->close_client) {
+    /* always keep-alive connections, close from the client side (c->header_cclose == false) */
+    c->cclose = cclose;
+  } else {
+    /* once we have the last request, ask the server to close the connection by "Connection: close" (c->header_cclose == true) */
+    c->header_cclose = cclose;
+  }
   if (c->cookies && c->written == 0) {
     /* we have some cookies => need to re-create HTTP requests */
-    if (c->conn_close) {
+    if (c->header_cclose) {
       http_request_create_cc(c);
     } else {
       http_request_create_ka(c);
     }
   }
-  if (c->conn_close) {
+  if (c->header_cclose) {
     request = c->request_cclose;
     request_len = c->request_cclose_length;
   } else {
@@ -595,7 +757,7 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
     /* first request within an established connection */
     c->cstats.writeable = now_writable;
 
-  write_len = request_len - c->written;
+  write_len = (request_len - c->written) > SNDBUF? SNDBUF: request_len - c->written;
 
   n = CONN_WRITE(c, request + c->written, write_len);
 
@@ -604,7 +766,8 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
       return;
     }
 
-    error("cannot write to [%d] (%s:%d): %s: reconnecting...\n", c->fd, c->host, c->port, strerror(errno));
+    /* ECONNRESET (104) and simillar */
+    error("cannot write to [%d] (%s:%d): %s (%d) reconnecting...\n", c->fd, c->host, c->port, strerror(errno), errno);
     goto err_conn;
   } else {
     if (c->cstats.handshake == 0)
@@ -658,9 +821,7 @@ int message_complete(http_parser *parser) {
   c->status = status;
   if (stats.fd) write_stats_line(stats.fd, c, NULL);
   c->delayed = c->delay_max;
-  c->cstats.established = 0;
   c->message_complete = true;
-  c->written = 0;
 
   return 0;
 }

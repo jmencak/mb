@@ -6,6 +6,7 @@
 #include <stdio.h>	/* fputs */
 #include <stdlib.h>	/* exit */
 #include <pthread.h>	/* pthread_mutex_lock() */
+#include <sys/time.h>	/* gettimeofday() */
 
 enum merr_suppress {
   s_none = 0,
@@ -21,5 +22,6 @@ void die(int, const char *, ...);
 void error(const char *, ...);
 void warning(const char *, ...);
 void info(const char *, ...);
+void dbg(const char *, ...);
 
 #endif /* MERR_H */

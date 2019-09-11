@@ -64,10 +64,18 @@ WOLFSSL_CTX *ssl_init(int ssl_version) {
 
   wolfSSL_Init();
 
-  if ((ctx = wolfSSL_CTX_new(method)) != NULL) {
-    wolfSSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, 0);
-    wolfSSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT);
+  if ((ctx = wolfSSL_CTX_new(method)) == NULL)
+    die(EXIT_FAILURE, "SSL context creation failed\n");
+
+  wolfSSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, 0);
+  wolfSSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_CLIENT);
+
+#ifdef HAVE_SESSION_TICKET
+  if (wolfSSL_CTX_UseSessionTicket(ctx) != WOLFSSL_SUCCESS) {
+    wolfSSL_CTX_free(ctx);
+    die(EXIT_FAILURE, "unable to set wolfSSL context to use a session ticket (RFC5077)\n");
   }
+#endif
 
   return ctx;
 }
@@ -92,10 +100,12 @@ WOLFSSL *ssl_new(connection *c) {
     }
   }
 
+#ifdef HAVE_SNI
   if ((n = wolfSSL_UseSNI(c->ssl, WOLFSSL_SNI_HOST_NAME, c->host, strlen(c->host))) != SSL_SUCCESS) {
     warning("failed to set using SNI: [%d]\n", c->fd);
   }
   wolfSSL_SNI_SetOptions(c->ssl, WOLFSSL_SNI_HOST_NAME, WOLFSSL_SNI_CONTINUE_ON_MISMATCH);
+#endif
 
   /* do not call ssl_connect()/wolfSSL_connect(), leave that up to wolfSSL_write() when needed */
 
@@ -105,7 +115,7 @@ WOLFSSL *ssl_new(connection *c) {
 int ssl_free(connection *c) {
   if (!c || !c->ssl) return 0;
 
-  if (c->tls_session_reuse) {
+  if (c->tls_session_reuse && !wolfSSL_session_reused(c->ssl)) {
     /* set up TLS session reuse */
     c->ssl_session = wolfSSL_get_session(c->ssl);
     /* note that it is possible for c->ssl_session == NULL */
