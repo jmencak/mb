@@ -16,6 +16,7 @@
 #include "mb.h"
 #include "merr.h"
 #include "net.h"
+#include "mcg.h"
 #ifdef HAVE_SSL
 #include "ssl.h"
 #endif
@@ -67,14 +68,16 @@ void exit_handler();
 void mb_threads_auto();
 void sig_int_term(int);
 void signals_set();
-static void json_check_value(json_value *, json_type, const char *);
-static void json_process_connection_tcp_keep_alive(json_value *, connection *);
-static void json_process_connection_tcp(json_value *, connection *);
-static void json_process_connection_headers(json_value *, connection *);
-static void json_process_connection_delay(json_value *, connection *);
-static void json_process_connection_close(json_value *, connection *);
-static int json_process_connection(json_value *, connection *);
-static int json_process_connections(json_value *);
+static void json_check_value(const json_value *, json_type, const char *);
+static void json_process_connection_tcp_keep_alive(const json_value *, connection *);
+static void json_process_connection_tcp(const json_value *, connection *);
+static void json_process_connection_headers(const json_value *, connection *);
+static void json_process_connection_body(const json_value *, connection *);
+static void json_process_connection_delay(const json_value *, connection *);
+static void json_process_connection_close(const json_value *, connection *);
+static int json_process_connection(const json_value *, connection *);
+static int json_process_connections(const json_value *);
+static void request_initialize_body_random(connection *, int);
 int requests_read(const char *);
 static int args_parse(struct config *, int, char **);
 #ifdef HAVE_SSL
@@ -230,7 +233,7 @@ void signals_set() {
     error("sigaction(): %s (%d)\n", strerror(errno), errno);
 }
 
-static void json_check_value(json_value *value, json_type type, const char *err) {
+static void json_check_value(const json_value *value, json_type type, const char *err) {
   if (value == NULL)
     return;
 
@@ -238,7 +241,7 @@ static void json_check_value(json_value *value, json_type type, const char *err)
     die(EXIT_FAILURE, "invalid input request file: %s\n", err);
 }
 
-static void json_process_connection_tcp_keep_alive(json_value *value, connection *c) {
+static void json_process_connection_tcp_keep_alive(const json_value *value, connection *c) {
   int length, i;
 
   if (value == NULL)
@@ -247,25 +250,26 @@ static void json_process_connection_tcp_keep_alive(json_value *value, connection
   length = value->u.object.length;
   for (i = 0; i < length; i++) {
     const char *k = value->u.object.values[i].name;
+    const json_value *v = value->u.object.values[i].value;
     if (!strcmp(k, "enable")) {
-      json_check_value(value->u.object.values[i].value, json_boolean, "boolean expected for tcp.keep-alive.enable");
-      c->tcp.keep_alive.enable = value->u.object.values[i].value->u.boolean;
+      json_check_value(v, json_boolean, "boolean expected for tcp.keep-alive.enable");
+      c->tcp.keep_alive.enable = v->u.boolean;
     } else if (!strcmp(k, "idle")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for tcp.keep-alive.idle");
-      c->tcp.keep_alive.idle = value->u.object.values[i].value->u.integer;
+      json_check_value(v, json_integer, "integer expected for tcp.keep-alive.idle");
+      c->tcp.keep_alive.idle = v->u.integer;
     } else if (!strcmp(k, "intvl")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for tcp.keep-alive.intvl");
-      c->tcp.keep_alive.intvl = value->u.object.values[i].value->u.integer;
+      json_check_value(v, json_integer, "integer expected for tcp.keep-alive.intvl");
+      c->tcp.keep_alive.intvl = v->u.integer;
     } else if (!strcmp(k, "cnt")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for tcp.keep-alive.cnt");
-      c->tcp.keep_alive.cnt = value->u.object.values[i].value->u.integer;
+      json_check_value(v, json_integer, "integer expected for tcp.keep-alive.cnt");
+      c->tcp.keep_alive.cnt = v->u.integer;
     } else {
       die(EXIT_FAILURE, "invalid input request file, key tcp.keep-alive.%s\n", k);
     }
   }
 }
 
-static void json_process_connection_tcp(json_value *value, connection *c) {
+static void json_process_connection_tcp(const json_value *value, connection *c) {
   int length, i;
 
   if (value == NULL)
@@ -274,9 +278,10 @@ static void json_process_connection_tcp(json_value *value, connection *c) {
   length = value->u.object.length;
   for (i = 0; i < length; i++) {
     const char *k = value->u.object.values[i].name;
+    const json_value *v = value->u.object.values[i].value;
     if (!strcmp(k, "keep-alive")) {
-      if (value->u.object.values[i].value->type == json_object)
-        json_process_connection_tcp_keep_alive(value->u.object.values[i].value, c);
+      if (v->type == json_object)
+        json_process_connection_tcp_keep_alive(v, c);
       else
         die(EXIT_FAILURE, "invalid input request file, tcp not an object\n");
     } else {
@@ -285,7 +290,7 @@ static void json_process_connection_tcp(json_value *value, connection *c) {
   }
 }
 
-static void json_process_connection_headers(json_value *value, connection *c) {
+static void json_process_connection_headers(const json_value *value, connection *c) {
   int length, i;
 
   if (value == NULL)
@@ -298,15 +303,15 @@ static void json_process_connection_headers(json_value *value, connection *c) {
   key_value *kv = c->headers;
   for (i = 0; i < length; i++, kv++) {
     const char *k = value->u.object.values[i].name;
-    const char *v = value->u.object.values[i].value->u.string.ptr;
+    const json_value *v = value->u.object.values[i].value;
 
     kv->key = mstrdup(k);
-    json_check_value(value->u.object.values[i].value, json_string, "string expected for headers");
-    kv->value = mstrdup(v);
+    json_check_value(v, json_string, "string expected for headers");
+    kv->value = mstrdup(v->u.string.ptr);
   }
 }
 
-static void json_process_connection_delay(json_value *value, connection *c) {
+static void json_process_connection_body(const json_value *value, connection *c) {
   int length, i;
 
   if (value == NULL)
@@ -315,12 +320,54 @@ static void json_process_connection_delay(json_value *value, connection *c) {
   length = value->u.object.length;
   for (i = 0; i < length; i++) {
     const char *k = value->u.object.values[i].name;
+    const json_value *v = value->u.object.values[i].value;
+    if (!strcmp(k, "content")) {
+      json_check_value(v, json_string, "string expected for body.content");
+      if (c->req_body != NULL) free(c->req_body);
+      c->req_body = mstrdup(v->u.string.ptr);
+    } else if (!strcmp(k, "size")) {
+      json_check_value(v, json_integer, "integer expected for body.size");
+      c->req_body_size = v->u.integer;
+    } else if (!strcmp(k, "type")) {
+      json_check_value(v, json_string, "string expected for body.type");
+      if (!strcmp(v->u.string.ptr, "random")) {
+        c->req_body_type = body_random;
+      } else if (!strcmp(v->u.string.ptr, "content")) {
+        c->req_body_type = body_content;
+      } else die(EXIT_FAILURE, "invalid body type: `%s'\n", v->u.string.ptr);
+    } else {
+      die(EXIT_FAILURE, "invalid input request file, key body.%s\n", k);
+    }
+  }
+
+  if (c->req_body_type == body_random) {
+    if (c->req_body) {
+      warning("request body content provided but body random type specified; ignoring request's body.content\n");
+      free(c->req_body); c->req_body = NULL;
+    }
+
+    if (c->req_body_size == 0) {
+      die(EXIT_FAILURE, "request's body.size cannot be 0 when request's body random type is specified\n");
+    }
+  }
+}
+
+static void json_process_connection_delay(const json_value *value, connection *c) {
+  int length, i;
+
+  if (value == NULL)
+    return;
+
+  length = value->u.object.length;
+  for (i = 0; i < length; i++) {
+    const char *k = value->u.object.values[i].name;
+    const json_value *v = value->u.object.values[i].value;
     if (!strcmp(k, "min")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for delay.min");
-      c->delay_min = value->u.object.values[i].value->u.integer;
+      json_check_value(v, json_integer, "integer expected for delay.min");
+      c->delay_min = v->u.integer;
     } else if (!strcmp(k, "max")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for delay.max");
-      c->delay_max = value->u.object.values[i].value->u.integer;
+      json_check_value(v, json_integer, "integer expected for delay.max");
+      c->delay_max = v->u.integer;
     } else {
       die(EXIT_FAILURE, "invalid input request file, key delay.%s\n", k);
     }
@@ -331,7 +378,7 @@ static void json_process_connection_delay(json_value *value, connection *c) {
   }
 }
 
-static void json_process_connection_close(json_value *value, connection *c) {
+static void json_process_connection_close(const json_value *value, connection *c) {
   int length, i;
 
   if (value == NULL)
@@ -340,20 +387,21 @@ static void json_process_connection_close(json_value *value, connection *c) {
   length = value->u.object.length;
   for (i = 0; i < length; i++) {
     const char *k = value->u.object.values[i].name;
+    const json_value *v = value->u.object.values[i].value;
     if (!strcmp(k, "client")) {
-      json_check_value(value->u.object.values[i].value, json_boolean, "boolean expected for close.client");
-      c->close_client = value->u.object.values[i].value->u.boolean;
+      json_check_value(v, json_boolean, "boolean expected for close.client");
+      c->close_client = v->u.boolean;
     } else if (!strcmp(k, "linger")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for close.linger");
+      json_check_value(v, json_integer, "integer expected for close.linger");
       c->close_linger = true;
-      c->close_linger_sec = value->u.object.values[i].value->u.integer;
+      c->close_linger_sec = v->u.integer;
     } else {
       die(EXIT_FAILURE, "invalid input request file, key close.%s\n", k);
     }
   }
 }
 
-static int json_process_connection(json_value *value, connection *c) {
+static int json_process_connection(const json_value *value, connection *c) {
   int length, i, clients = 1;
 
   if (value == NULL)
@@ -368,12 +416,12 @@ static int json_process_connection(json_value *value, connection *c) {
   length = value->u.object.length;
   for (i = 0; i < length; i++) {
     const char *k = value->u.object.values[i].name;
-    const char *v = value->u.object.values[i].value->u.string.ptr;
+    const json_value *v = value->u.object.values[i].value;
 
     if (!strcmp(k, "tcp")) {
       /* TCP-related options */
-      if (value->u.object.values[i].value->type == json_object)
-        json_process_connection_tcp(value->u.object.values[i].value, c);
+      if (v->type == json_object)
+        json_process_connection_tcp(v, c);
       else
         die(EXIT_FAILURE, "invalid input request file, tcp not an object\n");
 
@@ -382,8 +430,8 @@ static int json_process_connection(json_value *value, connection *c) {
 
     if (!strcmp(k, "delay")) {
       /* delay.min/max */
-      if (value->u.object.values[i].value->type == json_object)
-        json_process_connection_delay(value->u.object.values[i].value, c);
+      if (v->type == json_object)
+        json_process_connection_delay(v, c);
       else
         die(EXIT_FAILURE, "invalid input request file, delay not an object\n");
 
@@ -392,18 +440,33 @@ static int json_process_connection(json_value *value, connection *c) {
 
     if (!strcmp(k, "headers")) {
       /* headers */
-      if (value->u.object.values[i].value->type == json_object)
-        json_process_connection_headers(value->u.object.values[i].value, c);
+      if (v->type == json_object)
+        json_process_connection_headers(v, c);
       else
         die(EXIT_FAILURE, "invalid input request file, headers not an object\n");
 
       continue;
     }
 
+    if (!strcmp(k, "body")) {
+      /* body */
+      if (v->type == json_object) {
+        json_process_connection_body(v, c);
+        if (c->req_body_type == body_random) request_initialize_body_random(c, i);
+      } else if (v->type == json_string) {
+        /* versions up to 0.1.5 used string for "body", provide some backward compatibility */
+        if (c->req_body != NULL) free(c->req_body);
+        c->req_body = mstrdup(v->u.string.ptr);
+        warning("using string type for request body is deprecated, please change your input request file\n");
+      } else die(EXIT_FAILURE, "invalid input request file, headers not an object\n");
+
+      continue;
+    }
+
     if (!strcmp(k, "close")) {
       /* close.client/linger */
-      if (value->u.object.values[i].value->type == json_object)
-        json_process_connection_close(value->u.object.values[i].value, c);
+      if (v->type == json_object)
+        json_process_connection_close(v, c);
       else
         die(EXIT_FAILURE, "invalid input request file, close not an object\n");
 
@@ -411,20 +474,20 @@ static int json_process_connection(json_value *value, connection *c) {
     }
 
     if (!strcmp(k, "host_from")) {
-      json_check_value(value->u.object.values[i].value, json_string, "string expected for host_from");
+      json_check_value(v, json_string, "string expected for host_from");
       if (c->host_from != NULL) free(c->host_from);
-      c->host_from = mstrdup(v);
+      c->host_from = mstrdup(v->u.string.ptr);
     } else if (!strcmp(k, "host")) {
-      json_check_value(value->u.object.values[i].value, json_string, "string expected for host");
+      json_check_value(v, json_string, "string expected for host");
       if (c->host != NULL) free(c->host);
-      c->host = mstrdup(v);
+      c->host = mstrdup(v->u.string.ptr);
     } else if (!strcmp(k, "port")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for port");
-      c->port = value->u.object.values[i].value->u.integer;
+      json_check_value(v, json_integer, "integer expected for port");
+      c->port = v->u.integer;
     } else if (!strcmp(k, "scheme")) {
-      json_check_value(value->u.object.values[i].value, json_string, "string expected for scheme");
-      if (!strcmp(v, "http")) c->scheme = http;
-      else if (!strcmp(v, "https")) {
+      json_check_value(v, json_string, "string expected for scheme");
+      if (!strcmp(v->u.string.ptr, "http")) c->scheme = http;
+      else if (!strcmp(v->u.string.ptr, "https")) {
 #ifndef HAVE_SSL
         die(EXIT_FAILURE, "ssl support not compiled in\n");
 #endif
@@ -433,36 +496,32 @@ static int json_process_connection(json_value *value, connection *c) {
       }
       else die(EXIT_FAILURE, "invalid scheme %s\n", v);
     } else if (!strcmp(k, "method")) {
-      json_check_value(value->u.object.values[i].value, json_string, "string expected for method");
+      json_check_value(v, json_string, "string expected for method");
       if (c->method != NULL) free(c->method);
-      c->method = mstrdup(v);
+      c->method = mstrdup(v->u.string.ptr);
     } else if (!strcmp(k, "path")) {
-      json_check_value(value->u.object.values[i].value, json_string, "string expected for path");
+      json_check_value(v, json_string, "string expected for path");
       if (c->path != NULL) free(c->path);
-      c->path = mstrdup(v);
-    } else if (!strcmp(k, "body")) {
-      json_check_value(value->u.object.values[i].value, json_string, "string expected for body");
-      if (c->req_body != NULL) free(c->req_body);
-      c->req_body = mstrdup(v);
+      c->path = mstrdup(v->u.string.ptr);
     } else if (!strcmp(k, "max-requests")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for max-requests");
-      c->reqs_max = value->u.object.values[i].value->u.integer;
+      json_check_value(v, json_integer, "integer expected for max-requests");
+      c->reqs_max = v->u.integer;
       if (c->reqs_max < 0) die(EXIT_FAILURE, "max-requests must be >= 0\n", optarg);
     } else if (!strcmp(k, "keep-alive-requests")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for keep-alive-requests");
-      c->keep_alive_reqs = value->u.object.values[i].value->u.integer;
+      json_check_value(v, json_integer, "integer expected for keep-alive-requests");
+      c->keep_alive_reqs = v->u.integer;
       if (c->keep_alive_reqs < 0) die(EXIT_FAILURE, "keep-alive-requests must be >= 0\n", optarg);
     } else if (!strcmp(k, "tls-session-reuse")) {
-      json_check_value(value->u.object.values[i].value, json_boolean, "boolean expected for tls-session-reuse");
-      c->tls_session_reuse = value->u.object.values[i].value->u.boolean;
+      json_check_value(v, json_boolean, "boolean expected for tls-session-reuse");
+      c->tls_session_reuse = v->u.boolean;
     } else if (!strcmp(k, "clients")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for clients");
-      clients = value->u.object.values[i].value->u.integer;
+      json_check_value(v, json_integer, "integer expected for clients");
+      clients = v->u.integer;
       if (clients > MB_MAX_CLIENTS)
         die(EXIT_FAILURE, "too many clients specified for a request (%d > %d)\n", clients, MB_MAX_CLIENTS);
     } else if (!strcmp(k, "ramp-up")) {
-      json_check_value(value->u.object.values[i].value, json_integer, "integer expected for ramp-up time");
-      c->ramp_up = value->u.object.values[i].value->u.integer;
+      json_check_value(v, json_integer, "integer expected for ramp-up time");
+      c->ramp_up = v->u.integer;
     } else {
       die(EXIT_FAILURE, "invalid input request file, key %s\n", k);
     }
@@ -495,7 +554,7 @@ static int json_process_connection(json_value *value, connection *c) {
   return clients;
 }
 
-static int json_process_connections(json_value *value) {
+static int json_process_connections(const json_value *value) {
   int i, j;
   int length, ret, connections;
   connection *c = cs;
@@ -505,6 +564,7 @@ static int json_process_connections(json_value *value) {
     return 0;
 
   length = value->u.array.length;
+  if (!length) die(EXIT_FAILURE, "no requests found in the input request file\n");
   connections = length;
   for (i = 0; i < length; i++) {
     if (value->u.array.values[i]->type != json_object)
@@ -526,6 +586,7 @@ static int json_process_connections(json_value *value) {
       for (j = 1; j < ret; j++) {
         cs_ptr = c + j;
         memcpy(cs_ptr, c, sizeof(connection));
+        if (cs_ptr->req_body_type == body_random) request_initialize_body_random(cs_ptr, j);
         cs_ptr->request = NULL;		/* shallow copy, prevent `free's when calling http_requests_create() */
         cs_ptr->request_cclose = NULL;	/* shallow copy, prevent `free's when calling http_requests_create() */
         http_requests_create(cs_ptr);	/* prepare HTTP data to send over a socket */
@@ -539,6 +600,18 @@ static int json_process_connections(json_value *value) {
   }
 
   return connections;
+}
+
+static void request_initialize_body_random(connection *c, int i) {
+  /* Initialize requests's body size with random data */
+  size_t random_bytes_alloc = (c->req_body_size > MAX_REQ_LEN)? MAX_REQ_LEN: c->req_body_size;
+  random_bytes_alloc += NUM2HEX_DIGITS(random_bytes_alloc) + 9;	/* account for TE chunked overhead: <len>\r\n + <body>\r\n + 0\r\n\r\n */
+  if ((c->req_body_random = malloc(random_bytes_alloc)) == NULL)
+    die(EXIT_FAILURE, "malloc(): cannot allocate memory for connection's random data\n");
+
+  __uint128_t state = i * 2; /* different random data for every input "request" definition */
+  mcg64_seed(&state);
+  mcg64cpy(&state, c->req_body_random, random_bytes_alloc);
 }
 
 int requests_read(const char *file_in) {

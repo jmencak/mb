@@ -35,6 +35,8 @@ static int socket_write_delay_passed(aeEventLoop *, long long, void *);
 static inline bool connection_delay(connection *, aeTimeProc *);
 void socket_reconnect(connection *);
 void socket_read(aeEventLoop *, int, void *, int);
+static inline void socket_write_request_random_chunked(aeEventLoop *, connection *, char *, size_t);
+static inline void socket_write_request(aeEventLoop *, connection *, char *, size_t);
 void socket_write(aeEventLoop *, int, void *, int);
 
 void aeCreateFileEventOrDie(aeEventLoop *eventLoop, int fd, int mask,
@@ -86,6 +88,11 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
     headers_len += 14 + 4 + HTTP_CONT_MAX;		/* HTTP_CONT_LEN + separators + HTTP_CONT_MAX */
   }
 
+  if (cs_ptr->req_body_type == body_random) {
+    /* Add Transfer-Encoding header (random body type always has chunked content) */
+    headers_len += strlen(HTTP_TE_CHUNKED) + 2;		/* + HTTP_CRLF */
+  }
+
   if ((headers = calloc(headers_len + 1, sizeof(char))) == NULL)
     die(EXIT_FAILURE, "calloc(): cannot allocate memory for HTTP headers\n");
 
@@ -132,7 +139,13 @@ static inline char *http_headers_create(connection *c, bool conn_close) {
     headers_ptr += 17 + 2;	/* HTTP_CONN_CLOSE + separators */
   }
 
-  if (cs_ptr->req_body) {
+  if (cs_ptr->req_body_type == body_random) {
+    /* Add Transfer-Encoding header (random body type always ha chunked content) */
+    strcpy(headers_ptr, HTTP_TE_CHUNKED);
+    headers_ptr += strlen(HTTP_TE_CHUNKED);
+    strcpy(headers_ptr, HTTP_CRLF);
+    headers_ptr += 2;
+  } else if (cs_ptr->req_body) {
     /* Add Content-Length header */
     size_t content_len = strlen(cs_ptr->req_body);
     strcpy(headers_ptr, HTTP_CONT_LEN);
@@ -152,15 +165,12 @@ void http_request_create(connection *c, const char *headers, char **request, siz
 {
   size_t request_len = strlen(headers) + 2 + (c->req_body? strlen(c->req_body): 0) + 1;	/* + HTTP_CRLF + '\0' */
   if ((*request = malloc(request_len + 1)) == NULL) {
-    fprintf(stderr, "malloc(): cannot allocate memory for HTTP request\n");
-    exit(EXIT_FAILURE);
+    die(EXIT_FAILURE, "malloc(): cannot allocate memory for HTTP request\n");
   }
 
-  snprintf(*request, request_len, "%s" HTTP_CRLF "%s",
-           headers? headers: "",
-           c->req_body ? c->req_body : "");
-
-  *length = strlen(*request);
+  *length = snprintf(*request, request_len, "%s" HTTP_CRLF "%s",
+              headers? headers: "",
+              c->req_body? c->req_body : "");		/* a TE chunked request has an empty body */
 }
 
 void http_request_create_cc(connection *c)
@@ -225,6 +235,9 @@ void connection_init(connection *c) {
   c->keep_alive_reqs = 0;
   c->tls_session_reuse = true;
   c->req_body = NULL;
+  c->req_body_random = NULL;
+  c->req_body_type = body_content;
+  c->req_body_size = 0;
   c->request = NULL;
   c->request_cclose = NULL;
   c->close_client = false;
@@ -236,6 +249,7 @@ void connection_init(connection *c) {
   c->request_cclose_length = 0;
   c->message_complete = false;
   c->written = 0;
+  c->written_overhead = 0;
   c->read = 0;
   c->status = 0;
   c->cookies = NULL;
@@ -273,6 +287,7 @@ void connections_free(connection *cs) {
     if (cs_ptr->req_body) free(cs_ptr->req_body);
 
 free_dups:
+    if (cs_ptr->req_body_random) free(cs_ptr->req_body_random);
     if (cs_ptr->request) free(cs_ptr->request);
     if (cs_ptr->request_cclose) free(cs_ptr->request_cclose);
     if (cs_ptr->cookies) free(cs_ptr->cookies);
@@ -714,43 +729,107 @@ reconnect:
   socket_reconnect(c);
 }
 
-void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
-  ssize_t n;
-  connection *c = data;
-  bool cclose = false;
+static inline void socket_write_request_random_chunked(aeEventLoop *loop, connection *c, char *request, size_t request_headers_len) {
   uint64_t now_writable;
-  size_t request_len, write_len;
-  char *request;
+  size_t write_len, written_body = 0;
+  ssize_t n;
 
-  if (c->reqs_max && c->cstats.reqs_total >= c->reqs_max) {
-    /* we reached the maximum number of hits allowed */
-    aeDeleteFileEvent(loop, c->fd, AE_WRITABLE);
-    if (requests_max_cb) requests_max_cb();
-    return;
-  }
-  cclose = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
-  if (c->close_client) {
-    /* always keep-alive connections, close from the client side (c->header_cclose == false) */
-    c->cclose = cclose;
+  now_writable = time_us();
+  if (c->cstats.writeable == 0)
+    /* first request within an established connection */
+    c->cstats.writeable = now_writable;
+
+  if (c->written < request_headers_len) {
+    /* write headers first */
+    write_len = (request_headers_len - c->written) > SNDBUF? SNDBUF: request_headers_len - c->written;
+
+    n = CONN_WRITE(c, request + c->written, write_len);
   } else {
-    /* once we have the last request, ask the server to close the connection by "Connection: close" (c->header_cclose == true) */
-    c->header_cclose = cclose;
-  }
-  if (c->cookies && c->written == 0) {
-    /* we have some cookies => need to re-create HTTP requests */
-    if (c->header_cclose) {
-      http_request_create_cc(c);
+    /* headers written, write the body */
+    size_t body_offset, body_len, body_remaining_len, body_remaining_overhead_len;
+    bool last_chunk = false;
+    size_t overhead_fixed = 4;							/* 2x CRLF */
+    written_body = c->written - request_headers_len;
+
+    body_remaining_len = c->req_body_size - written_body + c->written_overhead;	/* remaining total body size to send excluding overhead */
+    /* overhead of the remaining body if it was sent as the last chunk */
+    body_remaining_overhead_len = NUM2HEX_DIGITS(body_remaining_len) + 4;	/* <len>\r\n + <body>\r\n */
+    if ((body_remaining_len + body_remaining_overhead_len) > SNDBUF) {
+      /* calculate the ideal body length to send filling up SNDBUF */
+      body_len = SNDBUF-4-(NUM2HEX_DIGITS(SNDBUF-8));				/* this can fail for some SNDBUF values; keep SNDBUF values powers of 2 so it does not */
     } else {
-      http_request_create_ka(c);
+      /* the remaining lenght of the body including TE overhead will fit into SNDBUF */
+      body_len = body_remaining_len;
+      last_chunk = true;
+      overhead_fixed = 9;							/* 2x CRLF + 0\r\n\r\n */
+    }
+
+    /* calculate the real number of bytes to be written including the overhead */
+    write_len = NUM2HEX_DIGITS(body_len) + body_len + overhead_fixed;		/* <len>\r\n + <body>\r\n + [0\r\n\r\n] */
+
+    size_t random_bytes = (c->req_body_size > MAX_REQ_LEN)? MAX_REQ_LEN: c->req_body_size;	/* length of allocated random bytes array (excluding overhead) */
+    body_offset = ((written_body % random_bytes) + write_len > random_bytes)? 0 : written_body % random_bytes;
+
+    char *c_ptr = c->req_body_random + body_offset;
+    c_ptr += snprintf(c_ptr, 17, "%lX\r", body_len);
+    *c_ptr++ = '\n';					/* overwrite the '\0' written by snprintf() */
+    c_ptr += body_len;
+    *c_ptr++ = '\r'; *c_ptr++ = '\n';
+
+    if (last_chunk) {
+      /* this is the last chunk, piggy back the closing TE chunk */
+      *c_ptr++ = '0'; *c_ptr++ = '\r'; *c_ptr++ = '\n'; *c_ptr++ = '\r'; *c_ptr++ = '\n';
+    }
+    c->written_overhead += NUM2HEX_DIGITS(body_len) + overhead_fixed;
+
+    n = CONN_WRITE(c, c->req_body_random + body_offset, write_len);
+  }
+
+  if (n < 0) {
+    if (errno == EAGAIN) {
+      return;
+    }
+
+    /* ECONNRESET (104) and simillar */
+    error("cannot write to [%d] (%s:%d): %s (%d) reconnecting...\n", c->fd, c->host, c->port, strerror(errno), errno);
+    goto err_conn;
+  } else {
+    if (c->cstats.handshake == 0)
+      /* first request within an established connection */
+      c->cstats.handshake = now_writable;
+
+    if (c->cstats.established == 0)
+      /* a request within an established connection (keep-alive) */
+      c->cstats.established = now_writable;
+
+    c->written += n;
+    c->cstats.written_total += n;
+
+    if (c->written == request_headers_len + c->req_body_size + c->written_overhead) {
+      /* writing done */
+      free(c->cookies); c->cookies = NULL;
+      c->message_complete = false;
+      c->cstats.reqs++;
+      c->cstats.reqs_total++;
+      c->written_overhead = 0;
+      aeDeleteFileEvent(loop, c->fd, AE_WRITABLE);
+      aeCreateFileEventOrDie(loop, c->fd, AE_READABLE, socket_read, c);
     }
   }
-  if (c->header_cclose) {
-    request = c->request_cclose;
-    request_len = c->request_cclose_length;
-  } else {
-    request = c->request;
-    request_len = c->request_length;
-  }
+
+  return;
+
+err_conn:
+  c->status = 0;
+  if (stats.fd) write_stats_line(stats.fd, c, "socket_write_request_random_chunked()");
+  stats.err_conn++;
+  socket_reconnect(c);
+}
+
+static inline void socket_write_request(aeEventLoop *loop, connection *c, char *request, size_t request_len) {
+  uint64_t now_writable;
+  size_t write_len;
+  ssize_t n;
 
   now_writable = time_us();
   if (c->cstats.writeable == 0)
@@ -796,9 +875,52 @@ void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
 
 err_conn:
   c->status = 0;
-  if (stats.fd) write_stats_line(stats.fd, c, "socket_write()");
+  if (stats.fd) write_stats_line(stats.fd, c, "socket_write_request()");
   stats.err_conn++;
   socket_reconnect(c);
+}
+
+void socket_write(aeEventLoop *loop, int fd, void *data, int flags) {
+  connection *c = data;
+  bool cclose = false;
+  size_t request_len;
+  char *request;
+
+  if (c->reqs_max && c->cstats.reqs_total >= c->reqs_max) {
+    /* we reached the maximum number of hits allowed */
+    aeDeleteFileEvent(loop, c->fd, AE_WRITABLE);
+    if (requests_max_cb) requests_max_cb();
+    return;
+  }
+  cclose = c->keep_alive_reqs && !((c->cstats.reqs_total + 1) % c->keep_alive_reqs);
+  if (c->close_client) {
+    /* always keep-alive connections, close from the client side (c->header_cclose == false) */
+    c->cclose = cclose;
+  } else {
+    /* once we have the last request, ask the server to close the connection by "Connection: close" (c->header_cclose == true) */
+    c->header_cclose = cclose;
+  }
+  if (c->cookies && c->written == 0) {
+    /* we have cookies and didn't write any data => re-create HTTP requests */
+    if (c->header_cclose) {
+      http_request_create_cc(c);
+    } else {
+      http_request_create_ka(c);
+    }
+  }
+  if (c->header_cclose) {
+    request = c->request_cclose;
+    request_len = c->request_cclose_length;
+  } else {
+    request = c->request;
+    request_len = c->request_length;
+  }
+
+  if (c->req_body_type == body_random) {
+    socket_write_request_random_chunked(loop, data, request, request_len);	/* request_len is only length of the headers */
+  } else {
+    socket_write_request(loop, data, request, request_len);			/* request_len is the complete request length including the body */
+  }
 }
 
 #if 0

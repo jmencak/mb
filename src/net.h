@@ -11,9 +11,9 @@
 #include "../libae/ae.h"		/* aeEventLoop */
 #include "../nginx/http_parser.h"	/* http_parser */
 
-#define RECVBUF		8192
-#define SNDBUF		8192
-#define MAX_REQ_LEN	(1UL<<22)	/* maximum number of characters to send to a server: 4M */
+#define RECVBUF		(1UL<<15)	/* 32kB */
+#define SNDBUF		(1UL<<15)	/* 32kB (keep this ^2); must be >= 16 (chunked TE overhead) */
+#define MAX_REQ_LEN	(1UL<<26)	/* maximum number of characters to send to a server without chunked TE: 64M (must be >= than SNDBUF, keep divisible by SNDBUF) */
 
 #define HTTP_CRLF	"\r\n"
 #define HTTP_PROTO	"HTTP/1.1"
@@ -24,6 +24,7 @@
 #define HTTP_CONN_CLOSE	"Connection: close"
 #define HTTP_CONT_LEN	"Content-Length"
 #define HTTP_CONT_MAX	20		/* generous 64-bit long content length maximum */
+#define HTTP_TE_CHUNKED	"Transfer-Encoding: chunked"
 
 #define SOCK_READ(fd, buf, len)		recv(fd, buf, len, MSG_NOSIGNAL)
 #define SOCK_WRITE(fd, buf, len)	send(fd, buf, len, MSG_NOSIGNAL)
@@ -39,10 +40,33 @@
 #define CONN_READABLE(c)	SOCK_READABLE(c->fd)
 #endif
 
+#define NUM2HEX_DIGITS(n) \
+ (((n) < 1UL<< 4)?  1U: \
+  ((n) < 1UL<< 8)?  2U: \
+  ((n) < 1UL<<12)?  3U: \
+  ((n) < 1UL<<16)?  4U: \
+  ((n) < 1UL<<20)?  5U: \
+  ((n) < 1UL<<24)?  6U: \
+  ((n) < 1UL<<28)?  7U: \
+  ((n) < 1UL<<32)?  8U: \
+  ((n) < 1UL<<36)?  9U: \
+  ((n) < 1UL<<40)? 10U: \
+  ((n) < 1UL<<44)? 11U: \
+  ((n) < 1UL<<48)? 12U: \
+  ((n) < 1UL<<52)? 13U: \
+  ((n) < 1UL<<56)? 14U: \
+  ((n) < 1UL<<60)? 15U: \
+  16U)	/* assuming no-one needs more... */
+
 typedef enum {
   http,
   https
 } scheme;
+
+typedef enum {
+  body_content,
+  body_random
+} req_body_type;
 
 typedef struct key_value {
   char* key;
@@ -95,9 +119,12 @@ typedef struct connection {
   uint64_t reqs_max;		/* maximum number of requests to send over this connection (including reconnects) */
   uint64_t keep_alive_reqs;	/* maximum number of requests that can be sent over this connection before reconnecting */
   bool tls_session_reuse;	/* enable session resumption to reestablish the connection without a new handshake */
-  char *req_body;		/* HTTP request body to send to a server */
-  char *request;		/* HTTP request data (headers & body combined) to send to a server (keep-alive) */
-  char *request_cclose;		/* HTTP request data (headers & body combined) to send to a server ("Connection: close") */
+  char *req_body;		/* HTTP request body to send to a server (unless "random" body type defined) */
+  char *req_body_random;	/* HTTP request body to send to a server (when "random" body type defined); buffer filled with chunk TE PRNG data */
+  req_body_type req_body_type;	/* HTTP request body type to send to a server ("content" or "random") */
+  uint64_t req_body_size;	/* HTTP request body size to send to a server when using "random" req_body_type */
+  char *request;		/* HTTP request data (headers & body [when *not* using chunked encoding]) to send to a server (keep-alive) */
+  char *request_cclose;		/* HTTP request data (headers & body [when *not* using chunked encoding]) to send to a server ("Connection: close") */
   bool close_client;		/* Should the client initiate connection close? */
   bool close_linger;		/* Enable socket lingering? */
   uint64_t close_linger_sec;	/* how many seconds to linger for */
@@ -107,6 +134,7 @@ typedef struct connection {
   size_t request_cclose_length;	/* HTTP request data (headers & body combined) to send to a server length ("Connection: close") */
   bool message_complete;	/* Do we have a complete HTTP response on this connection? */
   uint64_t written;		/* how many bytes of request was already written/sent */
+  uint64_t written_overhead;	/* how many bytes of the written data were an encoding overhead, e.g. chunked encoding */
   uint64_t read;		/* how many bytes of response was already read/received (including HTTP headers) */
   http_parser parser;		/* nginx parser */
   int status;			/* HTTP response status */
