@@ -40,9 +40,11 @@ A simple (requests.json) example:
     "method": "POST",
     "path": "/",
     "headers": {
-      "Content-Type": "application/x-www-form-urlencoded"
+      "Content-Type": "application/x-www-form-urlencoded",
     },
-    "body": "name=user&email=user@example.com",
+    "body": {
+      "content": "name=user&email=user@example.com",
+    },
     "delay": {
       "min": 3000,
       "max": 5000,
@@ -102,7 +104,11 @@ where the individual `<request>`s are
     ...
     "X-Custom-Header-n": <s>
   },
-  "body": <s>,
+  "body": {
+    "content": <s>,
+    "size": <n>,
+    "type": <s>,
+  },
   "max-requests": <n>,
   "keep-alive-requests": <n>,
   "clients": <n>,
@@ -134,10 +140,19 @@ where the individual `<request>`s are
       system defaults are used.
 * **scheme**: URL scheme (http|https)
 * **tls-session-reuse**: Use TLS session reuse? (true|false)
-* **method**: HTTP method (GET/HEAD/POST/...), see RFC 7231
+* **method**: HTTP method (GET/HEAD/PATCH/POST/PUT...), see RFC 7231
 * **path**: URL path
 * **headers**: an array of custom HTTP headers
 * **body**: HTTP requests body
+  * **content**: Data to send in the HTTP request body when **type** is "content".  For any
+    other **type**, the content is ignored.
+  * **size**: Size of the PRNG body to be sent in the body of the HTTP request.  The size is
+    the real size of the transferred data excluding overhead of the chunked Transfer-Encoding
+    (see RFC 2616).  This field must be set for **type** "random".  For any other **type**,
+    the size is ignored.
+  * **type**: (content|random).  If the type is "content", **content** will be sent in the
+    HTTP request.  If the type is "random", PRNG data with the period of `MAX_REQ_LEN`
+    will be sent.  If the **type** is unset, "content" is assumed.
 * **max-requests**: how many HTTP requests to send to **host** in total.  If the value is 0 or
   unspecified, the requests will be sent for the entire duration of the test.  If there is no more
   HTTP requests to be sent for all hosts, the test may finish earlier than specified.
