@@ -248,6 +248,8 @@ void connection_init(connection *c) {
   c->request_length = 0;
   c->request_cclose_length = 0;
   c->message_complete = false;
+  c->body.unsent = 0;
+  c->body.offset = 0;
   c->written = 0;
   c->written_overhead = 0;
   c->read = 0;
@@ -449,9 +451,18 @@ static int tcp_non_block_bind_connect(connection *c) {
       error("unable to setsockopt TCP_QUICKACK: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
+#endif
 
+#if 0
+    flags = RCVBUF;
     if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (void *)&flags, sizeof(flags)) == -1) {
       error("unable to setsockopt SO_RCVBUF: %s (%d)\n", strerror(errno), errno);
+      goto error;
+    }
+
+    flags = SNDBUF;
+    if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (void *)&flags, sizeof(flags)) == -1) {
+      error("unable to setsockopt SO_SNDBUF: %s (%d)\n", strerror(errno), errno);
       goto error;
     }
 #endif
@@ -466,6 +477,7 @@ static int tcp_non_block_bind_connect(connection *c) {
       }
     }
 
+    flags=1;
     if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (void *)&flags, sizeof(flags)) == -1) {
       error("unable to setsockopt SO_REUSEADDR: %s (%d)\n", strerror(errno), errno);
       goto error;
@@ -731,8 +743,9 @@ reconnect:
 
 static inline void socket_write_request_random_chunked(aeEventLoop *loop, connection *c, char *request, size_t request_headers_len) {
   uint64_t now_writable;
-  size_t write_len, written_body = 0;
   ssize_t n;
+  size_t write_len = c->body.unsent;
+  size_t written_body = 0;
 
   now_writable = time_us();
   if (c->cstats.writeable == 0)
@@ -744,8 +757,14 @@ static inline void socket_write_request_random_chunked(aeEventLoop *loop, connec
     write_len = (request_headers_len - c->written) > SNDBUF? SNDBUF: request_headers_len - c->written;
 
     n = CONN_WRITE(c, request + c->written, write_len);
+  } else if (write_len) {
+    /* headers written; the previous write of request body did not send all the requested data => send the remainder chunk again */
+    n = CONN_WRITE(c, c->req_body_random + c->body.offset, write_len);
+    /* c->body.(unsent|offset) only get used in future socket_write_request_random_chunked() call if (write_len != n) */
+    c->body.unsent = write_len - (n > 0? n: 0);
+    c->body.offset = n > 0? c->body.offset + n: c->body.offset;
   } else {
-    /* headers written, write the body */
+    /* headers written, no previous partial body chunk writes; write a body chunk */
     size_t body_offset, body_len, body_remaining_len, body_remaining_overhead_len;
     bool last_chunk = false;
     size_t overhead_fixed = 4;							/* 2x CRLF */
@@ -783,6 +802,9 @@ static inline void socket_write_request_random_chunked(aeEventLoop *loop, connec
     c->written_overhead += NUM2HEX_DIGITS(body_len) + overhead_fixed;
 
     n = CONN_WRITE(c, c->req_body_random + body_offset, write_len);
+    /* c->body.(unsent|offset) only get used in future socket_write_request_random_chunked() call if (write_len != n) */
+    c->body.unsent = write_len - (n > 0? n: 0);
+    c->body.offset = n > 0? body_offset + n: body_offset;
   }
 
   if (n < 0) {

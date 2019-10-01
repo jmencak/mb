@@ -12,7 +12,7 @@
 #include "../nginx/http_parser.h"	/* http_parser */
 
 #define RECVBUF		(1UL<<15)	/* 32kB */
-#define SNDBUF		(1UL<<15)	/* 32kB (keep this ^2); must be >= 16 (chunked TE overhead) */
+#define SNDBUF		(1UL<<15)	/* 32kB (keep this ^2); must be >= 16B (chunked TE overhead); consider setting SO_SNDBUF if going above 32kB */
 #define MAX_REQ_LEN	(1UL<<26)	/* maximum number of characters to send to a server without chunked TE: 64M (must be >= than SNDBUF, keep divisible by SNDBUF) */
 
 #define HTTP_CRLF	"\r\n"
@@ -133,6 +133,10 @@ typedef struct connection {
   size_t request_length;	/* HTTP request data (headers & body combined) to send to a server length (keep-alive) */
   size_t request_cclose_length;	/* HTTP request data (headers & body combined) to send to a server length ("Connection: close") */
   bool message_complete;	/* Do we have a complete HTTP response on this connection? */
+  struct {
+    uint64_t unsent;		/* the number of bytes that were not written by the previous "send" attempt and need to be resent */
+    uint64_t offset;		/* body offset from the beginning of chunk TE PRNG data of size "body_unsent" that needs to be resent */
+  } body;
   uint64_t written;		/* how many bytes of request was already written/sent */
   uint64_t written_overhead;	/* how many bytes of the written data were an encoding overhead, e.g. chunked encoding */
   uint64_t read;		/* how many bytes of response was already read/received (including HTTP headers) */
