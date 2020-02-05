@@ -27,10 +27,10 @@ A simple (requests.json) example:
     "path": "/",
     "delay": {
       "min": 1000,
-      "max": 2000,
+      "max": 2000
     },
     "keep-alive-requests": 100,
-    "clients": 2,
+    "clients": 2
   },
   {
     "scheme": "https",
@@ -40,17 +40,17 @@ A simple (requests.json) example:
     "method": "POST",
     "path": "/",
     "headers": {
-      "Content-Type": "application/x-www-form-urlencoded",
+      "Content-Type": "application/x-www-form-urlencoded"
     },
     "body": {
-      "content": "name=user&email=user@example.com",
+      "content": "name=user&email=user@example.com"
     },
     "delay": {
       "min": 3000,
-      "max": 5000,
+      "max": 5000
     },
     "keep-alive-requests": 1,
-    "clients": 3,
+    "clients": 3
   }
 ]
 ```
