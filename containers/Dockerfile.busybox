@@ -5,7 +5,7 @@ COPY . /mb
 
 RUN yum -y groupinstall 'Development Tools' && \
     cd /mb && \
-    make mb
+    make
 
 # mb container
 FROM busybox:1.30.1-glibc
