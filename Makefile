@@ -18,7 +18,7 @@ endif
 
 ifeq ($(SSL_ENABLE),y)
 CFLAGS += -DHAVE_SSL
-WOLFSSL_ARCHIVE := v3.12.2-stable.tar.gz
+WOLFSSL_ARCHIVE := v4.7.0-stable.tar.gz
 WOLFSSL_URL := https://github.com/wolfSSL/wolfssl/archive/$(WOLFSSL_ARCHIVE)
 WOLFSSL_DIR := wolfssl
 WOLFSSL_LIB := $(USR_DIR)/lib/libwolfssl.a
@@ -52,10 +52,8 @@ $(WOLFSSL_LIB): $(DEP_DIR)/$(WOLFSSL_ARCHIVE)
 	  ./autogen.sh && \
 	  ./configure CFLAGS="-Wno-stringop-truncation -Wno-stringop-overflow -Wno-size-of-pointer-memaccess" \
 	    --disable-examples \
-	    --enable-aesni \
 	    --enable-fastmath \
 	    --enable-hugecache \
-	    --enable-intelasm \
 	    --enable-oldtls \
 	    --enable-secure-renegotiation \
 	    --enable-session-ticket \
