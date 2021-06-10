@@ -17,13 +17,12 @@ CFLAGS  += -g
 endif
 
 ifeq ($(SSL_ENABLE),y)
-CFLAGS += -DHAVE_SSL
-WOLFSSL_ARCHIVE := v3.12.2-stable.tar.gz
+CFLAGS += -DHAVE_SSL -I$(USR_DIR)/include
+LIBS += -Wl,-Bstatic -lwolfssl -Wl,-Bdynamic
+WOLFSSL_ARCHIVE := v4.7.0-stable.tar.gz
 WOLFSSL_URL := https://github.com/wolfSSL/wolfssl/archive/$(WOLFSSL_ARCHIVE)
 WOLFSSL_DIR := wolfssl
 WOLFSSL_LIB := $(USR_DIR)/lib/libwolfssl.a
-CFLAGS += -I$(USR_DIR)/include
-LIBS += -Wl,-Bstatic -lwolfssl -Wl,-Bdynamic
 endif
 
 SRC := $(wildcard src/*.c)
@@ -50,12 +49,10 @@ $(WOLFSSL_LIB): $(DEP_DIR)/$(WOLFSSL_ARCHIVE)
 	(cd $(WOLFSSL_DIR) && \
 	  mkdir -p .git && \
 	  ./autogen.sh && \
-	  ./configure CFLAGS="-Wno-stringop-truncation -Wno-stringop-overflow -Wno-size-of-pointer-memaccess" \
+	  ./configure CFLAGS="-w" \
 	    --disable-examples \
-	    --enable-aesni \
 	    --enable-fastmath \
 	    --enable-hugecache \
-	    --enable-intelasm \
 	    --enable-oldtls \
 	    --enable-secure-renegotiation \
 	    --enable-session-ticket \
@@ -63,7 +60,8 @@ $(WOLFSSL_LIB): $(DEP_DIR)/$(WOLFSSL_ARCHIVE)
 	    --enable-sslv3 \
 	    --enable-static \
 	    --enable-tlsv10 \
-	    --enable-truncatedhmac && \
+	    --enable-truncatedhmac \
+	    $(WOLFSSL_CONFIG_EXTRA) && \
 	  make install prefix=$(USR_DIR))
 
 $(LIBAE_LIB): $(LIBAE_OBJ)
