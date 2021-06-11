@@ -221,6 +221,23 @@ start_request(1),delay(2),status(3),written(4),read(5),method_and_url(6),thread_
 * **err**: an optional error message in case of a failure
 
 
+## Performance tuning
+
+### SSL
+
+Apart from a few exceptions, the wolfSSL library used by this project is built
+with the default options for portability.  Hardware accelerated crypto support
+can have a notable impact on SSL performance.  For example, the following build
+options will typically improve the SSL performance on modern x86_64 platforms:
+
+```
+$ make WOLFSSL_CONFIG_EXTRA='--enable-aesni --enable-intelasm'
+```
+
+Refer to wolfSSL documentation "Increasing Performance" section for more
+detail.
+
+
 ## Creating a container image with the mb client
 
 A minimalist container image with the `mb` client can be created by one of the
