@@ -231,7 +231,7 @@ can have a notable impact on SSL performance.  For example, the following build
 options will typically improve the SSL performance on modern x86_64 platforms:
 
 ```
-$ make WOLFSSL_CONFIG_EXTRA='--enable-aesni --enable-intelasm'
+$ make WOLFSSL_CONFIG_EXTRA='--enable-aesni --enable-intelasm --enable-intelrand'
 ```
 
 Refer to wolfSSL documentation "Increasing Performance" section for more
