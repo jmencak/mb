@@ -1,5 +1,5 @@
 # Build container stage
-FROM centos:7
+FROM quay.io/centos/centos:stream8
 
 COPY . /mb
 
@@ -8,7 +8,7 @@ RUN yum -y groupinstall 'Development Tools' && \
     make
 
 # mb container
-FROM busybox:1.30.1-glibc
+FROM docker.io/library/busybox:1.35.0-glibc
 
 COPY --from=0 /mb/mb /usr/local/bin/mb
 
